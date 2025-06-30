@@ -1,0 +1,36 @@
+
+fixed_pos: position of the fixed asset
+
+Update: in _compute_intermediate_values function 
+
+    self.fixed_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins
+    self.fixed_quat = self._fixed_asset.data.root_quat_w
+
+use: in step_sim_no_action 
+
+
+
+fixed_tip_pos_local: the tip position of fixed asset with respect to the base origin of the fixed peg 
+
+used / defined : in randomize_initial_state
+
+    fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
+    fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
+
+use: finding the global pose of tip of the fixed asset
+
+
+
+fixed_pos_obs_frame: the tip of the fixed asset with respect to the origin of that env (not the origin of the world)
+
+defined once after every reset : randomize_initial_state
+
+    _, fixed_tip_pos = torch_utils.tf_combine(
+        self.fixed_quat, self.fixed_pos, self.identity_quat, fixed_tip_pos_local
+    )
+    self.fixed_pos_obs_frame[:] = fixed_tip_pos
+
+use: to clip the actions within a bound around the tip of the fixed asset
+
+
+held_base
