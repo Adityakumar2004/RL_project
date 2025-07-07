@@ -13,7 +13,7 @@ from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMater
 from isaaclab.utils import configclass
 
 from custom_scripts.factory.factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
-
+import os
 OBS_DIM_CFG = {
     "fingertip_pos": 3,
     "fingertip_pos_rel_fixed": 3,
@@ -116,10 +116,11 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0)
 
+    dir_robot = os.path.join(os.path.dirname(__file__), "usd")
     robot = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ASSET_DIR}/franka_mimic.usd",
+            usd_path=os.path.join(dir_robot, "Robots/Kinova/gen3n7.usd"),
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,
@@ -142,21 +143,26 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={
-                "panda_joint1": 0.00871,
-                "panda_joint2": -0.10368,
-                "panda_joint3": -0.00794,
-                "panda_joint4": -1.49139,
-                "panda_joint5": -0.00083,
-                "panda_joint6": 1.38774,
-                "panda_joint7": 0.0,
-                "panda_finger_joint2": 0.04,
+                "gen3_joint_1": 0.00871,
+                "gen3_joint_2": -0.10368,
+                "gen3_joint_3": -0.00794,
+                "gen3_joint_4": -1.49139,
+                "gen3_joint_5": -0.00083,
+                "gen3_joint_6": 1.38774,
+                "gen3_joint_7": 0.0,
+                "finger_joint": 0.04,
+                "left_inner_knuckle_joint": 0.0, # 0, 0.8757
+                "right_inner_knuckle_joint": 0.0, # 0, 0.8757
+                "right_outer_knuckle_joint": 0.0, # 0, 0.81
+                "left_inner_finger_joint": 0.0, #-0.8757, 0
+                "right_inner_finger_joint": 0.0, #-0.8757, 0
             },
             pos=(0.0, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         actuators={
-            "panda_arm1": ImplicitActuatorCfg(
-                joint_names_expr=["panda_joint[1-4]"],
+            "kinova_shoulder": ImplicitActuatorCfg(
+                joint_names_expr=["gen3_joint_[1-4]"],
                 stiffness=0.0,
                 damping=0.0,
                 friction=0.0,
@@ -164,8 +170,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 effort_limit=87,
                 velocity_limit=124.6,
             ),
-            "panda_arm2": ImplicitActuatorCfg(
-                joint_names_expr=["panda_joint[5-7]"],
+            "kinova_forearm": ImplicitActuatorCfg(
+                joint_names_expr=["gen3_joint_[5-7]"],
                 stiffness=0.0,
                 damping=0.0,
                 friction=0.0,
@@ -173,8 +179,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 effort_limit=12,
                 velocity_limit=149.5,
             ),
-            "panda_hand": ImplicitActuatorCfg(
-                joint_names_expr=["panda_finger_joint[1-2]"],
+            "kinova_gripper": ImplicitActuatorCfg(
+                joint_names_expr=['finger_joint', 'left_inner_knuckle_joint', 'right_inner_knuckle_joint', 'right_outer_knuckle_joint', 'left_inner_finger_joint', 'right_inner_finger_joint'],
                 effort_limit=40.0,
                 velocity_limit=0.04,
                 stiffness=7500.0,

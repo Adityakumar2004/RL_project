@@ -88,7 +88,7 @@ class env_wrapper(gym.Wrapper):
         obs = {k: v.cpu().numpy() for k, v in obs.items()}
         
         ## for marker visualization
-        self.unwrapped.create_markers()
+        # self.unwrapped.create_markers()
 
         if self.enable_recording:
             self.step_cntr = 0
@@ -118,16 +118,16 @@ class env_wrapper(gym.Wrapper):
             cam_image = cam_image.astype(np.uint8)
             self.vid_writers[i].append_data(cam_image)
             
-
+class normalizer()
 def make_env(video_folder:str | None =None):
 
     id_name = "peg_insert-v0-uw"
     gym.register(
         id=id_name,
-        entry_point="custom_scripts.factory.factory_env_2:FactoryEnv",
+        entry_point="custom_scripts.factory.factory_env_kinova:FactoryEnv",
         disable_env_checker=True,
         kwargs={
-            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg:FactoryTaskPegInsertCfg",
+            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg_kinovo:FactoryTaskPegInsertCfg",
         },
     )
 
@@ -148,8 +148,8 @@ def main():
     
     video_folder = os.path.join("custom_scripts", "logs", "sac_factory", "videos2")
     
-    # env = make_env(video_folder)
-    env = make_env()
+    env = make_env(video_folder)
+    # env = make_env()
 
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym single Observation space shape: {env.single_observation_space.shape}")
@@ -194,6 +194,15 @@ def main():
 
     flag = 0
     cnt = 0
+
+
+    joint_efforts = env.unwrapped.scene["robot"].data.applied_torque
+    num_joints = joint_efforts.shape[-1]
+    print(f"Number of joints: {num_joints}")
+    print(f"Joint values: {joint_efforts.cpu().numpy()[0:]}")
+
+
+
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
@@ -218,9 +227,11 @@ def main():
             
             # apply actions
             next_obs, rewards, terminations, truncations =  env.step(actions)
+
+            # env.unwrapped.scene["robot"].
             
-            env_ids = np.arange(env.unwrapped.num_envs)
-            env.unwrapped.visualize_env_markers()
+            # env_ids = np.arange(env.unwrapped.num_envs)
+            # env.unwrapped.visualize_env_markers()
 
             # if terminations.any() or truncations.any():
             #     print("-" * 80)
@@ -236,8 +247,11 @@ def main():
 
         cnt+= 1
 
+        # Print the number of joints and their current values
+
             # print(env.unwrapped.episode_length_buf)
             
+        
 
     # close the simulator
     env.close()

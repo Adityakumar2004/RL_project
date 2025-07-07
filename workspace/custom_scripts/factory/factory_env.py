@@ -40,8 +40,8 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat
 
 from custom_scripts.factory import factory_control as fc
-from custom_scripts.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
-from custom_scripts.factory.factory_env_cfg import FactoryTaskPegInsertCfg
+from custom_scripts.factory.factory_env_cfg_kinovo import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
+from custom_scripts.factory.factory_env_cfg_kinovo import FactoryTaskPegInsertCfg
 
 from isaaclab.sensors import CameraCfg, Camera
 

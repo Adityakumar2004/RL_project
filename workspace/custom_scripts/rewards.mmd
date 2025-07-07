@@ -1,0 +1,56 @@
+flowchart TD
+    %% MAIN REWARD FLOW
+    A[Agent Actions: Position, Rotation, Gripper] --> B[Environment Step: FactoryEnv]
+    B --> C[Reward Calculation: _get_rewards]
+
+    %% REWARD COMPONENTS
+    C --> D1[Keypoint Rewards]
+    C --> D2[Action Penalties]
+    C --> D3[Success and Engagement Bonuses]
+    D1 --> D1a[Baseline: squashing_fn keypoint_dist, a0, b0 cfg.keypoint_coef_baseline]
+    D1 --> D1b[Coarse: squashing_fn keypoint_dist, a1, b1 cfg.keypoint_coef_coarse]
+    D1 --> D1c[Fine: squashing_fn keypoint_dist, a2, b2 cfg.keypoint_coef_fine]
+    D2 --> D2a[Action Norm: torch.norm actions, p=2 * action_penalty_scale]
+    D2 --> D2b[Action Gradient: torch.norm actions - prev_actions, p=2 * action_grad_penalty_scale]
+    D3 --> D3a[Current Engaged: _get_curr_successes engage_threshold]
+    D3 --> D3b[Current Success: _get_curr_successes success_threshold, check_rot]
+    C --> E[Reward Buffer: kp_coarse + kp_baseline + kp_fine - action_penalty - action_grad_penalty + curr_engaged + curr_successes]
+    E --> F[Logging: logs_rew_* in self.extras]
+
+    %% REWARD COMPUTATION DETAIL
+    subgraph RewardComputationDetail ["Reward Computation Detail"]
+        Start([Start of Step])
+        GetKeypointDist["Compute keypoint distance between held and fixed assets"]
+        SquashBaseline["Apply squashing function a0, b0 to get Baseline Reward"]
+        SquashCoarse["Apply squashing function a1, b1 to get Coarse Reward"]
+        SquashFine["Apply squashing function a2, b2 to get Fine Reward"]
+        ActionPenalty["Compute action penalty: norm(actions)"]
+        ActionGradPenalty["Compute action gradient penalty: norm(actions - prev_actions)"]
+        Engagement["Check engagement: Is agent engaged?"]
+        Success["Check success: Is task succeeded?"]
+        WeightedSum["Sum weighted rewards: coarse + baseline + fine - action penalty * scale - action grad penalty * scale + engagement + success"]
+        Output([Output: Total Reward])
+
+        Start --> GetKeypointDist
+        GetKeypointDist --> SquashBaseline
+        GetKeypointDist --> SquashCoarse
+        GetKeypointDist --> SquashFine
+        Start --> ActionPenalty
+        Start --> ActionGradPenalty
+        Start --> Engagement
+        Start --> Success
+        SquashBaseline --> WeightedSum
+        SquashCoarse --> WeightedSum
+        SquashFine --> WeightedSum
+        ActionPenalty --> WeightedSum
+        ActionGradPenalty --> WeightedSum
+        Engagement --> WeightedSum
+        Success --> WeightedSum
+        WeightedSum --> Output
+    end
+
+    %% Reference
+    classDef ref fill:#f9f,stroke:#333,stroke-width:2px;
+    ReferenceNote["Reference: See Appendix B of https://arxiv.org/pdf/2408.04587"]:::ref
+    Output -.-> ReferenceNote
+
