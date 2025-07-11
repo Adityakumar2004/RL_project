@@ -3,7 +3,7 @@ import argparse
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Tutorial on running the cartpole RL environment.")
+parser = argparse.ArgumentParser(description="factory environment.")
 parser.add_argument("--num_envs", type=int, default=30, help="Number of environments to spawn.")
 
 # append AppLauncher cli args
@@ -55,7 +55,7 @@ class env_wrapper(gym.Wrapper):
             self.camera_flag = 0
             self.recording_step = 0
             self.video_length = 350
-            self.record_freq = 1 #5000
+            self.record_freq = 5000
             
             for i in range(len(self.unwrapped.cameras)):
                 writer = imageio.get_writer(os.path.join(video_folder, f"cam{i}_video.mp4"), fps=20)
@@ -218,7 +218,7 @@ class Replay_Buffer():
         self.ptr = (self.ptr + num_envs) % self.max_size
         self.size = min(self.size + num_envs, self.max_size)
     
-    def sample(self):
+    def sample(self, normalize_fn_dict=None):
         '''returns a batch of samples from the replay buffer 
             dtype: being torch.tensors 
             obs_batch: dict of observations dict{'key':(batch_size, obs_dim)}
@@ -227,12 +227,26 @@ class Replay_Buffer():
         assert self.batch_size <= self.size, "Batch size cannot be larger than the current size of the buffer"
         idxs = np.random.randint(0, self.size, size=self.batch_size)
         
-        obs_batch = {k: torch.tensor(v[idxs], dtype=torch.float32, device = self.device) for k, v in self.obs.items()}
-        next_obs_batch = {k: torch.tensor(v[idxs], dtype=torch.float32, device = self.device) for k, v in self.next_obs.items()}
         
+        obs_batch = {}
+        next_obs_batch = {}
+        for k in self.obs.keys():
+            obs_data = self.obs[k][idxs]
+            next_obs_data = self.next_obs[k][idxs]
+
+            # normalize if a normalizer is provided
+            if normalize_fn_dict and k in normalize_fn_dict:
+                obs_data = normalize_fn_dict[k].normalize(obs_data)
+                next_obs_data = normalize_fn_dict[k].normalize(next_obs_data)
+
+            obs_batch[k] = torch.tensor(obs_data, dtype=torch.float32, device=self.device)
+            next_obs_batch[k] = torch.tensor(next_obs_data, dtype=torch.float32, device=self.device)
+
+
         actions_batch = torch.tensor(self.actions[idxs], dtype=torch.float32, device = self.device)
         rewards_batch = torch.tensor(self.rewards[idxs], dtype=torch.float32, device = self.device)
         dones_batch = torch.tensor(self.dones[idxs], dtype=torch.float32, device = self.device)
+
 
         return obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch
     
@@ -283,9 +297,9 @@ class Args:
     """the frequency of training policy (delayed)"""
     target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
-    alpha: float = 0.2
+    alpha: float = 0.3
     """Entropy regularization coefficient."""
-    autotune: bool = True
+    autotune: bool = False
     """automatic tuning of the entropy coefficient"""
 
 ## model definitions
@@ -360,6 +374,39 @@ class Actor(nn.Module):
         return action, log_prob, mean
 
 
+class RunningNormalizer:
+    def __init__(self, size, epsilon=1e-4, clip_range=5.0):
+        self.size = size
+        self.mean = np.zeros(size, dtype=np.float32)
+        self.var = np.ones(size, dtype=np.float32)
+        self.count = epsilon
+        self.clip_range = clip_range
+
+    def update(self, x: np.ndarray):
+        batch_mean = np.mean(x, axis=0)
+        batch_var = np.var(x, axis=0)
+        batch_count = x.shape[0]
+        
+        delta = batch_mean - self.mean
+        total_count = self.count + batch_count
+
+        new_mean = self.mean + delta * batch_count / total_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + np.square(delta) * self.count * batch_count / total_count
+        new_var = M2 / total_count
+
+        self.mean = new_mean
+        self.var = new_var
+        self.count = total_count
+
+    def normalize(self, x: np.ndarray):
+        std = np.sqrt(self.var) + 1e-8
+        x_norm = (x - self.mean) / std
+        return np.clip(x_norm, -self.clip_range, self.clip_range)
+
+
+
 class Agent():
     def __init__(self, args: Args, envs: gym.Env, device: torch.device, checkpoint_path):
         
@@ -377,6 +424,12 @@ class Agent():
         self.qf2_target.load_state_dict(self.qf2.state_dict())
         self.q_optimizer = optim.Adam(list(self.qf1.parameters()) + list(self.qf2.parameters()), lr=args.q_lr)
         self.actor_optimizer = optim.Adam(list(self.actor.parameters()), lr=args.policy_lr)
+
+        self.normalizers = {
+            "policy": RunningNormalizer(envs.total_obs_space["policy"].shape[-1]),
+            "critic": RunningNormalizer(envs.total_obs_space["critic"].shape[-1]),
+        }
+
 
         if args.autotune:
     
@@ -402,13 +455,24 @@ class Agent():
     
     def store_buffer(self, obs, actions, rewards, next_obs, terminations, truncations):
         
+        # updating the normalizer parameters Before storing to replay buffer:
+        for k in obs.keys():
+            self.normalizers[k].update(obs[k])
+            self.normalizers[k].update(next_obs[k])
+
+
         if isinstance(actions, torch.Tensor):
             actions = actions.cpu().numpy()
 
         dones = np.logical_or(terminations, truncations)
         self.rb.add(obs, actions, rewards, next_obs, dones)
         
-    def get_action(self, obs, grad=True):
+    def get_action(self, obs, grad=True, normalize = False):
+
+        if normalize:
+            for k in obs.keys():
+                obs[k] = self.normalizers[k].normalize(obs[k])
+
         obs = {k:(torch.tensor(v, device=self.device, dtype=torch.float32) if isinstance(v,np.ndarray) else v) for k,v in obs.items()}
         
         if not grad:
@@ -422,7 +486,9 @@ class Agent():
 
     def train_critic(self):
         
-        obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch = self.rb.sample()
+        obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch = self.rb.sample(self.normalizers)
+
+        
         ## dim of obs_batch is dict{'key':(batch_size, obs_dim)}
         ## dim of actions_batch is (batch_size, action_dim)
         ## dim of rewards_batch is (batch_size, 1)
@@ -433,6 +499,9 @@ class Agent():
             target_q2 = self.qf2_target(next_obs_batch[self.obs_critic_key], next_actions) ## dim (batch_size, 1)
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_probs ## dim (batch_size, 1)
             target_q = rewards_batch + (1 - dones_batch) * self.args.gamma * target_q ## dim (batch_size, 1)
+
+            # clamping q_target to avoid exploding gradients
+            target_q = torch.clamp(target_q, -100.0, 100.0)
         
         current_q1 = self.qf1(obs_batch[self.obs_critic_key], actions_batch)  # (batch_size, 1)
         current_q2 = self.qf2(obs_batch[self.obs_critic_key], actions_batch)  # (batch_size, 1)
@@ -456,7 +525,7 @@ class Agent():
 
     def train_actor(self):
         for _ in range(self.args.policy_frequency):
-            obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch = self.rb.sample()
+            obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch = self.rb.sample(self.normalizers)
             actions, log_probs, _ = self.actor.get_action(obs_batch[self.obs_actor_key])
             q1 = self.qf1(obs_batch[self.obs_critic_key], actions)
             q2 = self.qf2(obs_batch[self.obs_critic_key], actions)
@@ -496,6 +565,14 @@ class Agent():
             "qf2_target": self.qf2_target.state_dict(),
             "actor_optimizer": self.actor_optimizer.state_dict(),
             "q_optimizer": self.q_optimizer.state_dict(),
+            "normalizers": {
+                key : {
+                    "mean": normalizer.mean,
+                    "var": normalizer.var,
+                    "count": normalizer.count
+                }
+                for key, normalizer in self.normalizers.items()
+            }
         }
         if args.autotune:
             checkpoint["log_alpha"] = self.log_alpha
@@ -513,7 +590,14 @@ class Agent():
         self.qf2_target.load_state_dict(checkpoint["qf2_target"])
         self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer"])
         self.q_optimizer.load_state_dict(checkpoint["q_optimizer"])
-        if args.autotune:
+
+        for key, norm_stats in checkpoint["normalizers"].items():
+            self.normalizers[key].mean = norm_stats["mean"]
+            self.normalizers[key].var = norm_stats["var"]
+            self.normalizers[key].count = norm_stats["count"]
+
+
+        if self.args.autotune:
             
             self.log_alpha = checkpoint["log_alpha"]
             self.a_optimizer.load_state_dict(checkpoint["a_optimizer"])
@@ -528,8 +612,9 @@ def TestingAgent(env, agent: Agent, num_episodes = 3, recording_enabled=True):
     for _ in range(num_episodes):
         obs, _ = env.reset()
         done = False
+        
         while not done:
-            actions, _, _ = agent.get_action(obs, grad=False)
+            actions, _, _ = agent.get_action(obs, grad=False, normalize=True)
             next_obs, rewards, terminations, truncations = env.step(actions)
             obs = next_obs
             total_reward += rewards.mean()
@@ -545,8 +630,6 @@ def TestingAgent(env, agent: Agent, num_episodes = 3, recording_enabled=True):
     return total_reward / num_episodes
     
 
-
-   
 if __name__ == "__main__":
     
     ## start the env 
@@ -555,8 +638,8 @@ if __name__ == "__main__":
     os.makedirs(checkpoint_folder, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_folder, "checkpoint_autotune_4.pt")
     
-    env = make_env(video_folder)
-    # env = make_env()
+    # env = make_env(video_folder)
+    env = make_env()
 
     tracking_enabled = True
     if tracking_enabled:
@@ -589,7 +672,7 @@ if __name__ == "__main__":
         if global_step < args.learning_starts:
 
             if pretrained_continuation:
-                actions, _, _ = agent.get_action(obs, grad=False)
+                actions, _, _ = agent.get_action(obs, grad=False, normalize=True)
             
             else:
                 actions = np.random.uniform(-1,1,env.action_space.shape)
@@ -602,7 +685,7 @@ if __name__ == "__main__":
 
         ## stepping through the all the parallel envs
         next_obs, rewards, terminations, truncations = env.step(actions)
-
+        
         ## storing the collected samples in the replay buffer
         agent.store_buffer(obs, actions, rewards, next_obs, terminations, truncations)
 
@@ -623,7 +706,7 @@ if __name__ == "__main__":
                 agent.Update_QTargetNetworks()
 
 
-            if global_step % 500 == 0:
+            if global_step % 300 == 0:
                 print("global step ", global_step)
                 if tracking_enabled:
                     wandb.log({
@@ -648,7 +731,7 @@ if __name__ == "__main__":
         ## inference
         if global_step % 3000 == 0:
             print(f"Testing agent at global step {global_step}")
-            avg_rewards = TestingAgent(env, agent, num_episodes=2)
+            avg_rewards = TestingAgent(env, agent, num_episodes=2, recording_enabled=env.enable_recording)
             if tracking_enabled:
                 wandb.log({"test_reward": avg_rewards.mean()}, step=global_step)
 

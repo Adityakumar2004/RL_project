@@ -118,7 +118,7 @@ class env_wrapper(gym.Wrapper):
             cam_image = cam_image.astype(np.uint8)
             self.vid_writers[i].append_data(cam_image)
             
-class normalizer()
+
 def make_env(video_folder:str | None =None):
 
     id_name = "peg_insert-v0-uw"
