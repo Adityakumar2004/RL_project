@@ -750,9 +750,9 @@ class FactoryEnv(DirectRLEnv):
         # (1.c.) Velocity
         fixed_state[:, 7:] = 0.0  # vel
         # (1.d.) Update values.
-        # self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
-        # self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
-        # self._fixed_asset.reset()
+        self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
+        self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
+        self._fixed_asset.reset()
 
         # (1.e.) Noisy position observation.
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)

@@ -4,7 +4,7 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="ppo on factory env")
-parser.add_argument("--num_envs", type=int, default=64, help="Number of environments to spawn.")
+parser.add_argument("--num_envs", type=int, default=20, help="Number of environments to spawn.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -86,9 +86,8 @@ class env_wrapper(gym.Wrapper):
 
         if enable_normalization:
             self.normalizers = {
-                "policy": RunningNormalizer(self.total_obs_space["policy"].shape[-1], clip_range=8.0),
-                "critic": RunningNormalizer(self.total_obs_space["critic"].shape[-1], clip_range=8.0),
-                "rewards": RunningNormalizer(1, clip_range=5.0),
+                "policy": RunningNormalizer(self.total_obs_space["policy"].shape[-1]),
+                "critic": RunningNormalizer(self.total_obs_space["critic"].shape[-1]),
             }
 
 
@@ -123,13 +122,11 @@ class env_wrapper(gym.Wrapper):
             if self.training:
                 self.normalizers["policy"].update(obs["policy"].cpu().numpy())
                 self.normalizers["critic"].update(obs["critic"].cpu().numpy())
-                self.normalizers["rewards"].update(rewards.cpu().numpy())
         
             ## applying normalization
             with torch.no_grad():
                 obs["policy"] = torch.tensor(self.normalizers["policy"].normalize(obs["policy"].cpu().numpy()), device=self.env.device)
                 obs["critic"] = torch.tensor(self.normalizers["critic"].normalize(obs["critic"].cpu().numpy()), device=self.env.device)
-                rewards = torch.tensor(self.normalizers["rewards"].normalize(rewards.cpu().numpy()), device=self.env.device)
 
         if self.output_type == "numpy":
             obs = {k: v.cpu().numpy() for k, v in obs.items()}
@@ -171,7 +168,6 @@ class env_wrapper(gym.Wrapper):
             if self.training:
                 self.normalizers["policy"].update(obs["policy"].cpu().numpy())
                 self.normalizers["critic"].update(obs["critic"].cpu().numpy())
-                
         
             ## applying normalization
             with torch.no_grad():
@@ -230,7 +226,7 @@ class env_wrapper(gym.Wrapper):
         print("[INFO] Environment set to EVALUATION mode.")
         self.training = False
 
-def make_env(video_folder:str | None =None, output_type: str = "numpy", enable_normalization=True):
+def make_env(video_folder:str | None =None, output_type: str = "numpy"):
 
     id_name = "peg_insert-v0-uw"
     gym.register(
@@ -249,10 +245,9 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy", enable_n
 
     env = gym.make(id_name, cfg = env_cfg, render_mode="rgb_array")
      
-    env = env_wrapper(env, video_folder, output_type=output_type, enable_normalization = enable_normalization)
+    env = env_wrapper(env, video_folder, output_type=output_type)
     
     return env
-
 
 
 @dataclass
@@ -289,7 +284,7 @@ class Args:
     """the learning rate of the optimizer"""
     num_envs: int = args_cli.num_envs
     """the number of parallel game environments"""
-    num_steps: int = 300
+    num_steps: int = 400
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -297,9 +292,9 @@ class Args:
     """the discount factor gamma"""
     gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 16
+    num_minibatches: int = 32
     """the number of mini-batches"""
-    update_epochs: int = 15
+    update_epochs: int = 10
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -352,7 +347,11 @@ class Agent(nn.Module):
     def get_value(self, x):
         return self.critic(x)
 
+
     def get_action_and_value(self, obs, action=None):
+        """
+        note the action that can be passed to this function should be the raw action 
+        """
         action_mean = self.actor_mean(obs["policy"])
         action_logstd = self.actor_logstd.expand_as(action_mean)
         action_std = torch.exp(action_logstd)
@@ -360,18 +359,18 @@ class Agent(nn.Module):
         if action is None:
             action = dist.sample()
         
-        # tanh_action = torch.tanh(action)
+        tanh_action = torch.tanh(action)
 
-        # ## log prob correction 
-        # log_prob = dist.log_prob(action)
-        # log_prob -= torch.log(1 - tanh_action.pow(2) + 1e-6)
-        # log_prob = log_prob.sum(-1)
+        ## log prob correction 
+        log_prob = dist.log_prob(action)
+        log_prob -= torch.log(1 - tanh_action.pow(2) + 1e-6)
+        log_prob = log_prob.sum(-1)
 
-        # entropy = dist.entropy().sum(-1)
-        # value = self.get_value(obs["critic"])
+        entropy = dist.entropy().sum(-1)
+        value = self.get_value(obs["critic"])
 
-        # return tanh_action, log_prob, entropy, value
-        return action, dist.log_prob(action).sum(-1), dist.entropy().sum(-1), self.critic(obs["critic"])
+        return action, tanh_action, log_prob, entropy, value
+        # return action, dist.log_prob(action).sum(-1), dist.entropy().sum(-1), self.critic(obs["critic"])
 
 def TestingAgent(env, agent: Agent, num_episodes = 2, recording_enabled=True):
     with torch.no_grad():
@@ -384,8 +383,8 @@ def TestingAgent(env, agent: Agent, num_episodes = 2, recording_enabled=True):
             done = False
             
             while not done:
-                actions, _, _, _ = agent.get_action_and_value(obs)
-                next_obs, rewards, terminations, truncations = env.step(actions)
+                action, tanh_action, _, _, _ = agent.get_action_and_value(obs)
+                next_obs, rewards, terminations, truncations = env.step(tanh_action)
                 
                 if isinstance(rewards, torch.Tensor):
                     rewards = rewards.cpu().numpy()
@@ -438,16 +437,15 @@ def TestingAgent(env, agent: Agent, num_episodes = 2, recording_enabled=True):
 if __name__ == "__main__":
     
     ## start the env 
-    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_rewards_scaled")
+    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_tanh")
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
     os.makedirs(checkpoint_folder, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_folder, "cp_1.pt")
+    checkpoint_path = os.path.join(checkpoint_folder, "cp_tanh.pt")
     
     args = Args()
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
     
-    # envs = make_env(video_folder, output_type="torch")
-    envs = make_env(output_type="torch")
+    envs = make_env(video_folder, output_type="torch")
     envs.train()  # set the env to training mode
 
     agent = Agent(envs).to(device)
@@ -457,7 +455,7 @@ if __name__ == "__main__":
     if tracking_enabled:
         wandb.init(
             project = "Space_RL",
-            name = f"ppo_Factory_{int(time.time())}"
+            name = f"ppo_Factory_tanh_{int(time.time())}"
             
         )
 
@@ -503,14 +501,14 @@ if __name__ == "__main__":
             dones[step] = next_done
             
             with torch.no_grad():
-                action, log_prob, _, value = agent.get_action_and_value(next_obs)
+                action, tanh_action, log_prob, _, value = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
                 ## doubt about the value.flatten            
 
             actions[step] = action
             log_probs[step] = log_prob
 
-            next_obs, reward, terminated, truncated = envs.step(action)
+            next_obs, reward, terminated, truncated = envs.step(tanh_action)
             next_done = terminated | truncated
             rewards[step] = reward
             
@@ -554,7 +552,7 @@ if __name__ == "__main__":
 
                 mb_obs = {k: v[mb_inds] for k, v in b_obs.items()}
                 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(mb_obs, b_actions[mb_inds])
+                _, _, newlogprob, entropy, newvalue = agent.get_action_and_value(mb_obs, b_actions[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -617,7 +615,7 @@ if __name__ == "__main__":
 
 
         ## inference 
-        avg_reward = TestingAgent(envs, agent, num_episodes=2, recording_enabled=envs.enable_recording)
+        avg_reward = TestingAgent(envs, agent, num_episodes=2, recording_enabled=True)
         checkpoint = {
             "agent": agent.state_dict(),
             "optimizer": optimizer.state_dict()
