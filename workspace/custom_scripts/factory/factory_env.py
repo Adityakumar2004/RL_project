@@ -951,6 +951,69 @@ class FactoryEnv(DirectRLEnv):
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
 
+    def get_asset_information(self):
+        """
+        Get comprehensive information about the fixed and held assets.
+        
+        Returns:
+            dict: Dictionary containing:
+                - hole_center_coords: Center coordinates of the hole (fixed asset)
+                - hole_frame: Orientation frame of the hole (fixed asset quaternion)
+                - fixed_asset_diameter: Diameter of the fixed asset
+                - held_asset_bottom_coords: Bottom coordinates of the held asset (peg)
+                - held_asset_height: Height of the held asset
+                - fixed_asset_height: Height of the fixed asset
+                - fixed_asset_base_height: Base height of the fixed asset
+        """
+        # Get current asset poses and configurations
+        # self._compute_intermediate_values(dt=self.physics_dt)
+        
+        # Fixed asset information (hole)
+        hole_base_center_coords = self.fixed_pos + self.scene.env_origins  # World coordinates
+        hole_base_frame = self.fixed_quat  # Orientation frame
+        
+        hole_center_coords = hole_base_center_coords
+        hole_center_coords[:,2] += self.cfg_task.fixed_asset_cfg.height + self.cfg_task.fixed_asset_cfg.base_height
+
+        # Fixed asset dimensions from configuration
+        fixed_asset_diameter = self.cfg_task.fixed_asset_cfg.diameter
+        fixed_asset_height = self.cfg_task.fixed_asset_cfg.height
+        fixed_asset_base_height = self.cfg_task.fixed_asset_cfg.base_height
+        
+        # Held asset information (peg)
+        held_asset_height = self.cfg_task.held_asset_cfg.height 
+        held_asset_diameter = self.cfg_task.held_asset_cfg.diameter
+        
+        # Calculate held asset bottom coordinates
+        # The held asset bottom is at the base of the asset in its local frame
+        held_asset_bottom_local = torch.zeros_like(self.held_base_pos_local)
+        held_asset_bottom_local[:, 2] = 0.0  # Bottom is at z=0 in local frame
+        
+        # Transform to world coordinates
+        held_asset_bottom_quat, held_asset_bottom_coords = torch_utils.tf_combine(
+            self.held_quat, 
+            self.held_pos + self.scene.env_origins,  # World position
+            self.identity_quat, 
+            held_asset_bottom_local
+        )
+        
+        # Create comprehensive information dictionary
+        asset_info = {
+            'hole_center_coords': hole_center_coords.detach().cpu().numpy(),
+            'hole_frame': hole_base_frame.detach().cpu().numpy(),
+            'fixed_asset_diameter': fixed_asset_diameter,
+            'fixed_asset_height': fixed_asset_height,
+            'fixed_asset_base_height': fixed_asset_base_height,
+            'held_asset_bottom_coords': held_asset_bottom_coords.detach().cpu().numpy(),
+            'held_asset_height': held_asset_height,
+            'held_asset_diameter': held_asset_diameter,
+            'task_name': self.cfg_task.name,
+            'num_envs': self.num_envs
+        }
+        
+        return asset_info
+
+
 # def main():
 #     factory_cfg = FactoryTaskPegInsertCfg()
 #     factory_cfg.num_envs = args_cli.num_envs

@@ -452,6 +452,53 @@ class env_wrapper(gym.Wrapper):
         print("[INFO] Environment set to EVALUATION mode.")
         self.training = False
 
+    def calculate_rewards(self, output_type):
+
+        asset_info = self.unwrapped.get_asset_information()
+        held_asset_coords = asset_info['held_asset_bottom_coords']
+
+        hole_center_coords = asset_info["hole_center_coords"]
+        radius = asset_info["fixed_asset_diameter"]/2
+
+        reward = reward_function(hole_center_coords, held_asset_coords, xy_threshold = (1.5*radius)**2, alpha = 15.0, beta = 50)
+
+        if output_type == "numpy":
+            reward = reward.cpu().numpy()
+        elif output_type == "torch":
+            reward = torch.tensor(reward, device=self.env.device)
+
+        return reward
+
+
+def reward_function(x_desired, x_current, xy_threshold, alpha = 15.0, beta = 50):
+    """
+    Computes the reward as exp(-alpha * ||x_current - x_desired||^2)
+    using a consistent NumPy-style computation.
+    
+    Inputs can be either np.ndarray or torch.Tensor (any shape ending in dimension D).
+    Returns: reward of shape [...], same as batch dimensions of input
+    """
+    if isinstance(x_current, torch.Tensor):
+        x = (x_current - x_desired).cpu().numpy()
+    elif isinstance(x_current, np.ndarray):
+        x = x_current - x_desired
+    else:
+        raise AssertionError("x_current and x_desired must be torch.Tensor or np.ndarray")
+    
+    squared_x = x*x
+
+    norm_squared_xy = np.sum(squared_x[:,:2], axis=-1)  
+    reward = np.exp(-alpha * norm_squared_xy)/4
+
+    mask = norm_squared_xy < xy_threshold
+    z_term = np.exp(-beta * squared_x[:,2])/4
+    reward += np.where(mask, 0.25, z_term)
+    
+
+    return reward
+
+
+    
 
 def make_env(video_folder:str | None =None, output_type: str = "numpy"):
 
@@ -524,9 +571,9 @@ def TestingAgent(env, device, agent: Agent, num_episodes = 2, recording_enabled=
 
 def main():
 
-    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_2_test")
+    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_task1")
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
-    checkpoint_path = os.path.join(checkpoint_folder, "cp_lstm_2_rnd.pt")
+    checkpoint_path = os.path.join(checkpoint_folder, "cp_lstm_task1.pt")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = make_env(video_folder, output_type="torch")
@@ -550,7 +597,7 @@ def main():
     agent.load_state_dict(checkpoint["agent"])
     print(f"Loaded checkpoint from {checkpoint_path}")
 
-    avg_reward = TestingAgent(env, device, agent, num_episodes=10, recording_enabled=True)
+    avg_reward = TestingAgent(env, device, agent, num_episodes=2, recording_enabled=True)
 
     print(f"Average reward over 4 episodes: {avg_reward:.2f}")
 

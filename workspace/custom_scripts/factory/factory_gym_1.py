@@ -17,6 +17,10 @@ args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+import isaaclab.sim as sim_utils
+
 import gymnasium as gym
 from isaaclab_tasks.utils import parse_env_cfg
 import torch
@@ -27,6 +31,8 @@ import numpy as np
 import torch
 from isaaclab_tasks.utils import parse_env_cfg
 import imageio
+
+
 
 class env_wrapper(gym.Wrapper):
     def __init__(self, env, video_folder:str | None =None):
@@ -87,8 +93,6 @@ class env_wrapper(gym.Wrapper):
         obs, info = self.env.reset(seed=seed, options=options)
         obs = {k: v.cpu().numpy() for k, v in obs.items()}
         
-        ## for marker visualization
-        # self.unwrapped.create_markers()
 
         if self.enable_recording:
             self.step_cntr = 0
@@ -117,17 +121,113 @@ class env_wrapper(gym.Wrapper):
             
             cam_image = cam_image.astype(np.uint8)
             self.vid_writers[i].append_data(cam_image)
-            
+
+    def calculate_rewards(self):
+
+        asset_info = self.unwrapped.get_asset_information()
+        held_asset_coords = asset_info['held_asset_bottom_coords']
+
+        hole_center_coords = asset_info["hole_center_coords"]
+        radius = asset_info["fixed_asset_diameter"]/2
+
+        reward = reward_function(hole_center_coords, held_asset_coords, xy_threshold = (1.5*radius)**2, alpha = 15.0, beta = 50)
+        return reward
+
+
+def reward_function(x_desired, x_current, xy_threshold, alpha = 15.0, beta = 50):
+    """
+    Computes the reward as exp(-alpha * ||x_current - x_desired||^2)
+    using a consistent NumPy-style computation.
+    
+    Inputs can be either np.ndarray or torch.Tensor (any shape ending in dimension D).
+    Returns: reward of shape [...], same as batch dimensions of input
+    """
+    if isinstance(x_current, torch.Tensor):
+        x = (x_current - x_desired).cpu().numpy()
+    elif isinstance(x_current, np.ndarray):
+        x = x_current - x_desired
+    else:
+        raise AssertionError("x_current and x_desired must be torch.Tensor or np.ndarray")
+    
+    squared_x = x*x
+
+    norm_squared_xy = np.sum(squared_x[:,:2], axis=-1)  
+    reward = np.exp(-alpha * norm_squared_xy)/4
+
+    mask = norm_squared_xy < xy_threshold
+    z_term = np.exp(-beta * squared_x[:,2])/4
+    reward += np.where(mask, 0.25, z_term)
+    
+
+    return reward
+
+
+
+def create_marker_spheres(env, count, color=(1.0, 0.0, 0.0)):
+
+    sphere_markers = {}
+    for i in range(count):
+        sphere_markers[f"sphere_{i}"] = sim_utils.SphereCfg(
+            radius = 0.001,
+            visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color = color),
+        )
+    
+    marker_cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/envMarkers",
+        markers=sphere_markers
+
+    )
+
+    env_marker_visualizer = VisualizationMarkers(marker_cfg)
+    return(env_marker_visualizer)
+
+def visualize_spheres(env, env_marker_visualizer, pose):
+    
+    if isinstance(pose, torch.Tensor):
+        pose = pose.cpu().numpy()
+    elif isinstance(pose, np.ndarray):
+        pass
+    else :
+        assert False, "pose must be a torch.Tensor or np.ndarray"
+    
+    identity_quat = np.array([1, 0, 0, 0])  # identity quat for sphere
+
+    if len(pose.shape) == 3:
+        (num_envs, num_spheres, _) = pose.shape
+    elif len(pose.shape) == 2:
+        (num_envs, _) = pose.shape
+        num_spheres = 1
+        pose = pose[:, None, :]  # Add extra dimension to make it (num_envs, 1, _)
+    else:
+        raise ValueError(f"pose must have 2 or 3 dimensions, got shape {pose.shape}")
+
+    translations = np.empty((num_envs * num_spheres, 3), dtype=np.float32)
+    orientations = np.empty((num_envs * num_spheres, 4), dtype=np.float32)
+    marker_indices = np.empty((num_envs * num_spheres,), dtype=np.int32)
+
+    for env_id in range(num_envs):
+        for count in range(num_spheres):
+            translations[(num_spheres*env_id + count)] = pose[env_id, count, :3]
+            orientations[(num_spheres*env_id + count)] = identity_quat
+            marker_indices[(num_spheres*env_id + count)] = count
+
+    env_marker_visualizer.visualize(
+        translations=translations,
+        orientations=orientations,
+        marker_indices=marker_indices
+    )
 
 def make_env(video_folder:str | None =None):
 
     id_name = "peg_insert-v0-uw"
     gym.register(
         id=id_name,
-        entry_point="custom_scripts.factory.factory_env_kinova:FactoryEnv",
+        # entry_point="custom_scripts.factory.factory_env_kinova:FactoryEnv",
+        entry_point="custom_scripts.factory.factory_env_markers:FactoryEnv",
         disable_env_checker=True,
         kwargs={
-            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg_kinovo:FactoryTaskPegInsertCfg",
+            # "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg_kinovo:FactoryTaskPegInsertCfg",
+            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg:FactoryTaskPegInsertCfg",
         },
     )
 
@@ -148,8 +248,8 @@ def main():
     
     video_folder = os.path.join("custom_scripts", "logs", "sac_factory", "videos2")
     
-    env = make_env(video_folder)
-    # env = make_env()
+    # env = make_env(video_folder)
+    env = make_env()
 
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym single Observation space shape: {env.single_observation_space.shape}")
@@ -170,12 +270,22 @@ def main():
     # env.unwrapped.camera1.set_world_poses_from_view(eye_camera.unsqueeze(0), camera_target.unsqueeze(0))
 
     env.set_camera_pose_fixed_asset(0, env_id=0)
+    
     # reset environment
     obs, info = env.reset()
+    # env.unwrapped.visualize_env_markers()
+    # env.unwrapped.create_marker_spheres(4)
+    # held_asset_viz = create_marker_spheres(env, 4)
+    # fixed_asset_viz = create_marker_spheres(env, 4, (0.0, 1.0, 0.0))
+    held_asset_coord_viz = create_marker_spheres(env, 1, (0.0, 0.0, 1.0))
+    fixed_asset_coord_viz = create_marker_spheres(env, 3, (0.0, 1.0, 0.0))
+    
     # simulate environment
+
     print("max length of episode ", env.unwrapped.max_episode_length)
     print("action space shape ", env.action_space.shape)
     print(env.unwrapped.scene["robot"].joint_names)
+
 
 
     # print(env.unwrapped.actions.action_term_groups["joint_efforts"])
@@ -223,33 +333,53 @@ def main():
                 # print("[INFO]: infos: \n", infos)
                 print("count :", cnt)
             
+            # print("keypoints_held: \n", env.unwrapped.keypoints_held)
+
+            # print(env.unwrapped.keypoints_held.shape)
+            # print(len(env.unwrapped.keypoints_fixed.shape))
+            # print("keypoints_fixed: \n", env.unwrapped.keypoints_fixed)
             
+            # print("----"*10)
+            # print(env.unwrapped.scene.env_origins.shape)
+
+            asset_info = env.unwrapped.get_asset_information()
+            held_asset_coords = asset_info['held_asset_bottom_coords']
+
+            fixed_asset_coords = asset_info["hole_center_coords"]
+
+            radius = asset_info["fixed_asset_diameter"]/2
+            fixed_asset_radii_point = fixed_asset_coords + np.array([0, radius, 0])
+            fixed_asset_radii_point_half = fixed_asset_coords + np.array([0, radius + radius/2, 0])
+
+            stacked_hole_pts = np.stack([fixed_asset_coords, fixed_asset_radii_point, fixed_asset_radii_point_half], axis=1)
+
+            print("---"*10)
+            
+
+
+            # print(held_asset_coords)
+
+            
+            # keypoints_held = env.unwrapped.scene.env_origins[:,None,:] + env.unwrapped.keypoints_held
+            # keypoints_fixed = env.unwrapped.scene.env_origins[:,None,:] + env.unwrapped.keypoints_fixed
+            # env.unwrapped.visualize_spheres(keypoints_held)
+
+            ## -----------------   visualization stuff -----------------------------
+            visualize_spheres(env, held_asset_coord_viz, held_asset_coords)
+            visualize_spheres(env, fixed_asset_coord_viz, stacked_hole_pts)
+            # visualize_spheres(env, fixed_pos_coords_viz, fixed_pos_coords)
+            # visualize_spheres(env, held_asset_viz, keypoints_held)
+            # visualize_spheres(env, fixed_asset_viz, keypoints_fixed)
             
             # apply actions
             next_obs, rewards, terminations, truncations =  env.step(actions)
+            print("rewards \n", rewards)
 
-            # env.unwrapped.scene["robot"].
-            
-            # env_ids = np.arange(env.unwrapped.num_envs)
-            # env.unwrapped.visualize_env_markers()
-
-            # if terminations.any() or truncations.any():
-            #     print("-" * 80)
-            #     print("[INFO]: Resetting environment...")
-            #     # reset the environment
-            #     # env.reset()
-            #     print("[INFO]: Current observations: \n", next_obs)
-            #     print("[INFO]: terminations and truncations \n",terminations, "\n",truncations)
-            #     # print("[INFO]: infos: \n", infos)
-            #     print("count :", cnt)
-            #     cnt = 0
 
 
         cnt+= 1
 
-        # Print the number of joints and their current values
 
-            # print(env.unwrapped.episode_length_buf)
             
         
 

@@ -49,7 +49,7 @@ from custom_scripts.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, F
 from custom_scripts.factory.factory_env_cfg import FactoryTaskPegInsertCfg
 
 from isaaclab.sensors import CameraCfg, Camera
-
+import torch
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
 
@@ -755,9 +755,9 @@ class FactoryEnv(DirectRLEnv):
         # (1.c.) Velocity
         fixed_state[:, 7:] = 0.0  # vel
         # (1.d.) Update values.
-        # self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
-        # self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
-        # self._fixed_asset.reset()
+        self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
+        self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
+        self._fixed_asset.reset()
 
         # (1.e.) Noisy position observation.
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)
@@ -1187,72 +1187,156 @@ class FactoryEnv(DirectRLEnv):
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
 
 
-    def create_markers(self):
-        marker_cfg = VisualizationMarkersCfg(
-            prim_path="/Visuals/envMarkers",
-            markers={
-                "fixed_sphere": sim_utils.SphereCfg(
-                    radius=0.005,
-                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
-                ),
-                "fingertip_frame": sim_utils.UsdFileCfg(
-                    usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
-                    scale=(0.05, 0.05, 0.05),
-                ),
-                # "held_base": sim_utils.UsdFileCfg(
-                #     usd
-                # )
-            }
-        )
-        self.env_marker_visualizer = VisualizationMarkers(marker_cfg)
-        # return VisualizationMarkers(marker_cfg)
-
-    def visualize_env_markers(self, env_idx):
-        """Visualize the fixed_pos_obs_frame and fingertip pose for a given environment index."""
+    def get_asset_information(self):
+        """
+        Get comprehensive information about the fixed and held assets.
         
-        num_envs = len(env_idx)
-        # Sphere at fixed_pos_obs_frame
-        sphere_pos = self.fixed_pos_obs_frame[env_idx].detach().cpu().numpy().reshape(num_envs, 3)
-        # Frame at fingertip
-        frame_pos = self.fingertip_midpoint_pos[env_idx].detach().cpu().numpy().reshape(num_envs, 3)
-        frame_quat = self.fingertip_midpoint_quat[env_idx].detach().cpu().numpy().reshape(num_envs, 4)
-        # Stack positions and orientations
-        translations = np.vstack([sphere_pos, frame_pos])
-        orientations = np.vstack([
-            np.array([[1, 0, 0, 0]]),  # identity quat for sphere
-            frame_quat
-        ])
-        marker_indices = np.array([0, 1])  # 0: sphere, 1: frame
-        self.env_marker_visualizer.visualize(translations=translations, orientations=orientations, marker_indices=marker_indices)
+        Returns:
+            dict: Dictionary containing:
+                - hole_center_coords: Center coordinates of the hole (fixed asset)
+                - hole_frame: Orientation frame of the hole (fixed asset quaternion)
+                - fixed_asset_diameter: Diameter of the fixed asset
+                - held_asset_bottom_coords: Bottom coordinates of the held asset (peg)
+                - held_asset_height: Height of the held asset
+                - fixed_asset_height: Height of the fixed asset
+                - fixed_asset_base_height: Base height of the fixed asset
+        """
+        # Get current asset poses and configurations
+        # self._compute_intermediate_values(dt=self.physics_dt)
+        
+        # Fixed asset information (hole)
+        hole_base_center_coords = self.fixed_pos + self.scene.env_origins  # World coordinates
+        hole_base_frame = self.fixed_quat  # Orientation frame
+        
+        hole_center_coords = hole_base_center_coords
+        hole_center_coords[:,2] += self.cfg_task.fixed_asset_cfg.height + self.cfg_task.fixed_asset_cfg.base_height
 
-    def visualize_env_markers(self):
-        """Visualize the fixed_pos_obs_frame and fingertip pose for all environments."""
-        num_envs = self.num_envs
-
-        # Gather all sphere positions (fixed_pos_obs_frame) and frame positions/quats (fingertip)
-        sphere_pos = (self.fixed_pos_obs_frame + self.scene.env_origins).detach().cpu().numpy().reshape(num_envs, 3)
-        frame_pos = (self.fingertip_midpoint_pos + self.scene.env_origins).detach().cpu().numpy().reshape(num_envs, 3)
-        frame_quat = self.fingertip_midpoint_quat.detach().cpu().numpy().reshape(num_envs, 4)
-
-        # Stack all positions: [sphere0, frame0, sphere1, frame1, ...]
-        translations = np.empty((num_envs * 2, 3), dtype=np.float32)
-        orientations = np.empty((num_envs * 2, 4), dtype=np.float32)
-        marker_indices = np.empty((num_envs * 2,), dtype=np.int32)
-
-        for i in range(num_envs):
-            translations[2 * i] = sphere_pos[i]
-            translations[2 * i + 1] = frame_pos[i]
-            orientations[2 * i] = np.array([1, 0, 0, 0])  # identity quat for sphere
-            orientations[2 * i + 1] = frame_quat[i]
-            marker_indices[2 * i] = 0  # 0: sphere
-            marker_indices[2 * i + 1] = 1  # 1: frame
-
-        self.env_marker_visualizer.visualize(
-            translations=translations,
-            orientations=orientations,
-            marker_indices=marker_indices
+        # Fixed asset dimensions from configuration
+        fixed_asset_diameter = self.cfg_task.fixed_asset_cfg.diameter
+        fixed_asset_height = self.cfg_task.fixed_asset_cfg.height
+        fixed_asset_base_height = self.cfg_task.fixed_asset_cfg.base_height
+        
+        # Held asset information (peg)
+        held_asset_height = self.cfg_task.held_asset_cfg.height 
+        held_asset_diameter = self.cfg_task.held_asset_cfg.diameter
+        
+        # Calculate held asset bottom coordinates
+        # The held asset bottom is at the base of the asset in its local frame
+        held_asset_bottom_local = torch.zeros_like(self.held_base_pos_local)
+        held_asset_bottom_local[:, 2] = 0.0  # Bottom is at z=0 in local frame
+        
+        # Transform to world coordinates
+        held_asset_bottom_quat, held_asset_bottom_coords = torch_utils.tf_combine(
+            self.held_quat, 
+            self.held_pos + self.scene.env_origins,  # World position
+            self.identity_quat, 
+            held_asset_bottom_local
         )
+        
+        # Create comprehensive information dictionary
+        asset_info = {
+            'hole_center_coords': hole_center_coords.detach().cpu().numpy(),
+            'hole_frame': hole_base_frame.detach().cpu().numpy(),
+            'fixed_asset_diameter': fixed_asset_diameter,
+            'fixed_asset_height': fixed_asset_height,
+            'fixed_asset_base_height': fixed_asset_base_height,
+            'held_asset_bottom_coords': held_asset_bottom_coords.detach().cpu().numpy(),
+            'held_asset_height': held_asset_height,
+            'held_asset_diameter': held_asset_diameter,
+            'task_name': self.cfg_task.name,
+            'num_envs': self.num_envs
+        }
+        
+        return asset_info
 
+    def print_asset_information(self, env_idx=0):
+        """
+        Print detailed asset information for a specific environment.
+        
+        Args:
+            env_idx (int): Environment index to print information for (default: 0)
+        """
+        asset_info = self.get_asset_information()
+        
+        print(f"\n=== Asset Information for Environment {env_idx} ===")
+        print(f"Task: {asset_info['task_name']}")
+        print(f"\nFixed Asset (Hole):")
+        print(f"  - Center coordinates: {asset_info['hole_center_coords'][env_idx]}")
+        print(f"  - Orientation frame (quaternion): {asset_info['hole_frame'][env_idx]}")
+        print(f"  - Diameter: {asset_info['fixed_asset_diameter']:.6f} m")
+        print(f"  - Height: {asset_info['fixed_asset_height']:.6f} m")
+        print(f"  - Base height: {asset_info['fixed_asset_base_height']:.6f} m")
+        
+        print(f"\nHeld Asset (Peg):")
+        print(f"  - Bottom coordinates: {asset_info['held_asset_bottom_coords'][env_idx]}")
+        print(f"  - Height: {asset_info['held_asset_height']:.6f} m")
+        print(f"  - Diameter: {asset_info['held_asset_diameter']:.6f} m")
+        
+        # Calculate clearance (difference between hole and peg diameters)
+        clearance = asset_info['fixed_asset_diameter'] - asset_info['held_asset_diameter']
+        print(f"\nAssembly Information:")
+        print(f"  - Clearance (hole_diameter - peg_diameter): {clearance:.6f} m")
+        print(f"  - Clearance percentage: {(clearance/asset_info['fixed_asset_diameter'])*100:.2f}%")
+
+    def get_hole_center_and_frame(self):
+        """
+        Get the center coordinates and orientation frame of the hole (fixed asset).
+        
+        Returns:
+            tuple: (hole_center_coords, hole_frame)
+                - hole_center_coords: numpy array of shape (num_envs, 3) with world coordinates
+                - hole_frame: numpy array of shape (num_envs, 4) with quaternion orientations
+        """
+        self._compute_intermediate_values(dt=self.physics_dt)
+        
+        # Fixed asset information (hole)
+        hole_center_coords = self.fixed_pos + self.scene.env_origins  # World coordinates
+        hole_frame = self.fixed_quat  # Orientation frame
+        
+        return hole_center_coords.detach().cpu().numpy(), hole_frame.detach().cpu().numpy()
+
+    def get_held_asset_bottom_coords(self):
+        """
+        Get the bottom coordinates of the held asset (peg).
+        
+        Returns:
+            numpy.ndarray: Array of shape (num_envs, 3) with world coordinates of held asset bottom
+        """
+        self._compute_intermediate_values(dt=self.physics_dt)
+        
+        # Calculate held asset bottom coordinates
+        held_asset_bottom_local = torch.zeros_like(self.held_base_pos_local)
+        held_asset_bottom_local[:, 2] = 0.0  # Bottom is at z=0 in local frame
+        
+        # Transform to world coordinates
+        held_asset_bottom_quat, held_asset_bottom_coords = torch_utils.tf_combine(
+            self.held_quat, 
+            self.held_pos + self.scene.env_origins,  # World position
+            self.identity_quat, 
+            held_asset_bottom_local
+        )
+        
+        return held_asset_bottom_coords.detach().cpu().numpy()
+
+    def get_asset_dimensions(self):
+        """
+        Get the dimensions of both fixed and held assets.
+        
+        Returns:
+            dict: Dictionary containing:
+                - fixed_asset_diameter: Diameter of the fixed asset (hole)
+                - fixed_asset_height: Height of the fixed asset
+                - fixed_asset_base_height: Base height of the fixed asset
+                - held_asset_diameter: Diameter of the held asset (peg)
+                - held_asset_height: Height of the held asset
+        """
+        return {
+            'fixed_asset_diameter': self.cfg_task.fixed_asset_cfg.diameter,
+            'fixed_asset_height': self.cfg_task.fixed_asset_cfg.height,
+            'fixed_asset_base_height': self.cfg_task.fixed_asset_cfg.base_height,
+            'held_asset_diameter': self.cfg_task.held_asset_cfg.diameter,
+            'held_asset_height': self.cfg_task.held_asset_cfg.height,
+        }
 
 # def main():
 #     factory_cfg = FactoryTaskPegInsertCfg()
