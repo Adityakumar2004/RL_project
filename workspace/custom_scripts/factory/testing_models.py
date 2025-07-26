@@ -571,9 +571,9 @@ def TestingAgent(env, device, agent: Agent, num_episodes = 2, recording_enabled=
 
 def main():
 
-    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_task1")
+    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_task2_2")
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
-    checkpoint_path = os.path.join(checkpoint_folder, "cp_lstm_task1.pt")
+    checkpoint_path = os.path.join(checkpoint_folder, "cp_lstm_task2_2.pt")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = make_env(video_folder, output_type="torch")

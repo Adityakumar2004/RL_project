@@ -50,6 +50,10 @@ from custom_scripts.factory.factory_env_cfg import FactoryTaskPegInsertCfg
 
 from isaaclab.sensors import CameraCfg, Camera
 import torch
+
+from isaaclab.sim.schemas import CollisionPropertiesCfg, modify_collision_properties
+
+
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
 
@@ -63,6 +67,7 @@ class FactoryEnv(DirectRLEnv):
 
         super().__init__(cfg, render_mode, **kwargs)
 
+        self.changes_bool = True
         self._set_body_inertias()
         self._init_tensors()
         self._set_default_dynamics_parameters()
@@ -605,7 +610,9 @@ class FactoryEnv(DirectRLEnv):
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
 
-        self.randomize_initial_state(env_ids)
+        # self.randomize_initial_state(env_ids)
+        
+        self.randomize_near_goal_state(env_ids)
 
     def _get_target_gear_base_offset(self):
         """Get offset of target gear from the gear base asset."""
@@ -631,7 +638,18 @@ class FactoryEnv(DirectRLEnv):
 
         fixed_state = self._fixed_asset.data.default_root_state.clone()[env_ids]
         fixed_state[:, 0:3] += self.scene.env_origins[env_ids]
+        fixed_state[:,2] = 5
         fixed_state[:, 7:] = 0.0
+
+        ## disable collisions here 
+        # prim_path = self._fixed_asset.cfg.prim_path
+        # modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=False))
+
+        # for i in range(self.num_envs):
+        #     prim_path = f"/World/envs/env_{i}/FixedAsset"
+        #     modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=False))
+        
+
         self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
         self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
         self._fixed_asset.reset()
@@ -726,236 +744,6 @@ class FactoryEnv(DirectRLEnv):
         self.scene.update(dt=self.physics_dt)
         self._compute_intermediate_values(dt=self.physics_dt)
 
-    def randomize_initial_state(self, env_ids):
-        """Randomize initial state and perform any episode-level randomization."""
-        # Disable gravity.
-        physics_sim_view = sim_utils.SimulationContext.instance().physics_sim_view
-        physics_sim_view.set_gravity(carb.Float3(0.0, 0.0, 0.0))
-
-        # (1.) Randomize fixed asset pose.
-        fixed_state = self._fixed_asset.data.default_root_state.clone()[env_ids]
-        # (1.a.) Position
-        rand_sample = torch.rand((len(env_ids), 3), dtype=torch.float32, device=self.device)
-        fixed_pos_init_rand = 2 * (rand_sample - 0.5)  # [-1, 1]
-        fixed_asset_init_pos_rand = torch.tensor(
-            self.cfg_task.fixed_asset_init_pos_noise, dtype=torch.float32, device=self.device
-        )
-        fixed_pos_init_rand = fixed_pos_init_rand @ torch.diag(fixed_asset_init_pos_rand)
-        fixed_state[:, 0:3] += fixed_pos_init_rand + self.scene.env_origins[env_ids]
-        # (1.b.) Orientation
-        fixed_orn_init_yaw = np.deg2rad(self.cfg_task.fixed_asset_init_orn_deg)
-        fixed_orn_yaw_range = np.deg2rad(self.cfg_task.fixed_asset_init_orn_range_deg)
-        rand_sample = torch.rand((len(env_ids), 3), dtype=torch.float32, device=self.device)
-        fixed_orn_euler = fixed_orn_init_yaw + fixed_orn_yaw_range * rand_sample
-        fixed_orn_euler[:, 0:2] = 0.0  # Only change yaw.
-        fixed_orn_quat = torch_utils.quat_from_euler_xyz(
-            fixed_orn_euler[:, 0], fixed_orn_euler[:, 1], fixed_orn_euler[:, 2]
-        )
-        fixed_state[:, 3:7] = fixed_orn_quat
-        # (1.c.) Velocity
-        fixed_state[:, 7:] = 0.0  # vel
-        # (1.d.) Update values.
-        self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
-        self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
-        self._fixed_asset.reset()
-
-        # (1.e.) Noisy position observation.
-        fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)
-        fixed_asset_pos_rand = torch.tensor(self.cfg.obs_rand.fixed_asset_pos, dtype=torch.float32, device=self.device)
-        fixed_asset_pos_noise = fixed_asset_pos_noise @ torch.diag(fixed_asset_pos_rand)
-        self.init_fixed_pos_obs_noise[:] = fixed_asset_pos_noise
-
-        self.step_sim_no_action()
-
-        # Compute the frame on the bolt that would be used as observation: fixed_pos_obs_frame
-        # For example, the tip of the bolt can be used as the observation frame
-        fixed_tip_pos_local = torch.zeros_like(self.fixed_pos)
-        fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
-        fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
-        if self.cfg_task.name == "gear_mesh":
-            fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[0]
-
-        _, fixed_tip_pos = torch_utils.tf_combine(
-            self.fixed_quat, self.fixed_pos, self.identity_quat, fixed_tip_pos_local
-        )
-        self.fixed_pos_obs_frame[:] = fixed_tip_pos
-
-        # (2) Move gripper to randomizes location above fixed asset. Keep trying until IK succeeds.
-        # (a) get position vector to target
-        bad_envs = env_ids.clone()
-        ik_attempt = 0
-
-        hand_down_quat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
-        self.hand_down_euler = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        while True:
-            n_bad = bad_envs.shape[0]
-
-            above_fixed_pos = fixed_tip_pos.clone()
-            above_fixed_pos[:, 2] += self.cfg_task.hand_init_pos[2]
-
-            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
-            above_fixed_pos_rand = 2 * (rand_sample - 0.5)  # [-1, 1]
-            hand_init_pos_rand = torch.tensor(self.cfg_task.hand_init_pos_noise, device=self.device)
-            above_fixed_pos_rand = above_fixed_pos_rand @ torch.diag(hand_init_pos_rand)
-            above_fixed_pos[bad_envs] += above_fixed_pos_rand
-
-            # (b) get random orientation facing down
-            hand_down_euler = (
-                torch.tensor(self.cfg_task.hand_init_orn, device=self.device).unsqueeze(0).repeat(n_bad, 1)
-            )
-
-            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
-            above_fixed_orn_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
-            hand_init_orn_rand = torch.tensor(self.cfg_task.hand_init_orn_noise, device=self.device)
-            above_fixed_orn_noise = above_fixed_orn_noise @ torch.diag(hand_init_orn_rand)
-            hand_down_euler += above_fixed_orn_noise
-            self.hand_down_euler[bad_envs, ...] = hand_down_euler
-            hand_down_quat[bad_envs, :] = torch_utils.quat_from_euler_xyz(
-                roll=hand_down_euler[:, 0], pitch=hand_down_euler[:, 1], yaw=hand_down_euler[:, 2]
-            )
-
-            # (c) iterative IK Method
-            self.ctrl_target_fingertip_midpoint_pos[bad_envs, ...] = above_fixed_pos[bad_envs, ...]
-            self.ctrl_target_fingertip_midpoint_quat[bad_envs, ...] = hand_down_quat[bad_envs, :]
-
-            pos_error, aa_error = self.set_pos_inverse_kinematics(env_ids=bad_envs)
-            pos_error = torch.linalg.norm(pos_error, dim=1) > 1e-3
-            angle_error = torch.norm(aa_error, dim=1) > 1e-3
-            any_error = torch.logical_or(pos_error, angle_error)
-            bad_envs = bad_envs[any_error.nonzero(as_tuple=False).squeeze(-1)]
-
-            # Check IK succeeded for all envs, otherwise try again for those envs
-            if bad_envs.shape[0] == 0:
-                break
-
-            self._set_franka_to_default_pose(
-                joints=[0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0], env_ids=bad_envs
-            )
-
-            ik_attempt += 1
-
-        self.step_sim_no_action()
-
-        # Add flanking gears after servo (so arm doesn't move them).
-        if self.cfg_task.name == "gear_mesh" and self.cfg_task.add_flanking_gears:
-            small_gear_state = self._small_gear_asset.data.default_root_state.clone()[env_ids]
-            small_gear_state[:, 0:7] = fixed_state[:, 0:7]
-            small_gear_state[:, 7:] = 0.0  # vel
-            self._small_gear_asset.write_root_pose_to_sim(small_gear_state[:, 0:7], env_ids=env_ids)
-            self._small_gear_asset.write_root_velocity_to_sim(small_gear_state[:, 7:], env_ids=env_ids)
-            self._small_gear_asset.reset()
-
-            large_gear_state = self._large_gear_asset.data.default_root_state.clone()[env_ids]
-            large_gear_state[:, 0:7] = fixed_state[:, 0:7]
-            large_gear_state[:, 7:] = 0.0  # vel
-            self._large_gear_asset.write_root_pose_to_sim(large_gear_state[:, 0:7], env_ids=env_ids)
-            self._large_gear_asset.write_root_velocity_to_sim(large_gear_state[:, 7:], env_ids=env_ids)
-            self._large_gear_asset.reset()
-
-        # (3) Randomize asset-in-gripper location.
-        # flip gripper z orientation
-        flip_z_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-        fingertip_flipped_quat, fingertip_flipped_pos = torch_utils.tf_combine(
-            q1=self.fingertip_midpoint_quat,
-            t1=self.fingertip_midpoint_pos,
-            q2=flip_z_quat,
-            t2=torch.zeros_like(self.fingertip_midpoint_pos),
-        )
-
-        # get default gripper in asset transform
-        held_asset_relative_pos, held_asset_relative_quat = self.get_handheld_asset_relative_pose()
-        asset_in_hand_quat, asset_in_hand_pos = torch_utils.tf_inverse(
-            held_asset_relative_quat, held_asset_relative_pos
-        )
-
-        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
-            q1=fingertip_flipped_quat, t1=fingertip_flipped_pos, q2=asset_in_hand_quat, t2=asset_in_hand_pos
-        )
-
-        # Add asset in hand randomization
-        rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        self.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
-        if self.cfg_task.name == "gear_mesh":
-            self.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
-
-        held_asset_pos_noise = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
-        self.held_asset_pos_noise = self.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
-        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
-            q1=translated_held_asset_quat,
-            t1=translated_held_asset_pos,
-            q2=self.identity_quat,
-            t2=self.held_asset_pos_noise,
-        )
-
-        held_state = self._held_asset.data.default_root_state.clone()
-        held_state[:, 0:3] = translated_held_asset_pos + self.scene.env_origins
-        held_state[:, 3:7] = translated_held_asset_quat
-        held_state[:, 7:] = 0.0
-        self._held_asset.write_root_pose_to_sim(held_state[:, 0:7])
-        self._held_asset.write_root_velocity_to_sim(held_state[:, 7:])
-        self._held_asset.reset()
-
-        #  Close hand
-        # Set gains to use for quick resets.
-        reset_task_prop_gains = torch.tensor(self.cfg.ctrl.reset_task_prop_gains, device=self.device).repeat(
-            (self.num_envs, 1)
-        )
-        reset_rot_deriv_scale = self.cfg.ctrl.reset_rot_deriv_scale
-        self._set_gains(reset_task_prop_gains, reset_rot_deriv_scale)
-
-        self.step_sim_no_action()
-
-        grasp_time = 0.0
-        while grasp_time < 0.25:
-            self.ctrl_target_joint_pos[env_ids, 7:] = 0.0  # Close gripper.
-            self.ctrl_target_gripper_dof_pos = 0.0
-            self.close_gripper_in_place()
-            self.step_sim_no_action()
-            grasp_time += self.sim.get_physics_dt()
-
-        self.prev_joint_pos = self.joint_pos[:, 0:7].clone()
-        self.prev_fingertip_pos = self.fingertip_midpoint_pos.clone()
-        self.prev_fingertip_quat = self.fingertip_midpoint_quat.clone()
-
-        # Set initial actions to involve no-movement. Needed for EMA/correct penalties.
-        self.actions = torch.zeros_like(self.actions)
-        self.prev_actions = torch.zeros_like(self.actions)
-        # Back out what actions should be for initial state.
-        # Relative position to bolt tip.
-        self.fixed_pos_action_frame[:] = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
-
-        pos_actions = self.fingertip_midpoint_pos - self.fixed_pos_action_frame
-        pos_action_bounds = torch.tensor(self.cfg.ctrl.pos_action_bounds, device=self.device)
-        pos_actions = pos_actions @ torch.diag(1.0 / pos_action_bounds)
-        self.actions[:, 0:3] = self.prev_actions[:, 0:3] = pos_actions
-
-        # Relative yaw to bolt.
-        unrot_180_euler = torch.tensor([-np.pi, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
-        unrot_quat = torch_utils.quat_from_euler_xyz(
-            roll=unrot_180_euler[:, 0], pitch=unrot_180_euler[:, 1], yaw=unrot_180_euler[:, 2]
-        )
-
-        fingertip_quat_rel_bolt = torch_utils.quat_mul(unrot_quat, self.fingertip_midpoint_quat)
-        fingertip_yaw_bolt = torch_utils.get_euler_xyz(fingertip_quat_rel_bolt)[-1]
-        fingertip_yaw_bolt = torch.where(
-            fingertip_yaw_bolt > torch.pi / 2, fingertip_yaw_bolt - 2 * torch.pi, fingertip_yaw_bolt
-        )
-        fingertip_yaw_bolt = torch.where(
-            fingertip_yaw_bolt < -torch.pi, fingertip_yaw_bolt + 2 * torch.pi, fingertip_yaw_bolt
-        )
-
-        yaw_action = (fingertip_yaw_bolt + np.deg2rad(180.0)) / np.deg2rad(270.0) * 2.0 - 1.0
-        self.actions[:, 5] = self.prev_actions[:, 5] = yaw_action
-
-        # Zero initial velocity.
-        self.ee_angvel_fd[:, :] = 0.0
-        self.ee_linvel_fd[:, :] = 0.0
-
-        # Set initial gains for the episode.
-        self._set_gains(self.default_gains)
-
-        physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
-
     def randomize_near_goal_state(self, env_ids):
         """Randomize initial state and perform any episode-level randomization."""
         # Disable gravity.
@@ -984,7 +772,22 @@ class FactoryEnv(DirectRLEnv):
         fixed_state[:, 3:7] = fixed_orn_quat
         # (1.c.) Velocity
         fixed_state[:, 7:] = 0.0  # vel
+
+        # if self.changes_bool:
+            # fixed_state = self._fixed_asset.data.default_root_state.clone()[env_ids]
+
+        self.fixed_state = fixed_state.clone()  ## fixed state has coords of hole_base wrt world origin   
+        # print("fixed_asset_pos \n ", fixed_state[:,:3])
         # (1.d.) Update values.
+
+        ## disable collisions here 
+        # prim_path = self._fixed_asset.cfg.prim_path
+        # modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=False))
+
+        # for i in range(self.num_envs):
+        #     prim_path = f"/World/envs/env_{i}/FixedAsset"
+        #     modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=False))
+
         # self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
         # self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
         # self._fixed_asset.reset()
@@ -1002,13 +805,21 @@ class FactoryEnv(DirectRLEnv):
         fixed_tip_pos_local = torch.zeros_like(self.fixed_pos)
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
+
+        ## needs changes here if fixed asset is moved
         if self.cfg_task.name == "gear_mesh":
             fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[0]
 
+        if self.changes_bool:
+            fixed_pos = self.fixed_state[:,:3] - self.scene.env_origins[env_ids]
+        else:
+            fixed_pos = self.fixed_pos
+
         _, fixed_tip_pos = torch_utils.tf_combine(
-            self.fixed_quat, self.fixed_pos, self.identity_quat, fixed_tip_pos_local
+            self.fixed_quat, fixed_pos, self.identity_quat, fixed_tip_pos_local
         )
-        self.fixed_pos_obs_frame[:] = fixed_tip_pos
+        self.fixed_pos_obs_frame[:][env_ids] = fixed_tip_pos
+        ## fixed_pos_obs_frame has coords of tip of hole wrt envs origin
 
         # (2) Move gripper to randomizes location above fixed asset. Keep trying until IK succeeds.
         # (a) get position vector to target
@@ -1028,6 +839,19 @@ class FactoryEnv(DirectRLEnv):
             hand_init_pos_rand = torch.tensor(self.cfg_task.hand_init_pos_noise, device=self.device)
             above_fixed_pos_rand = above_fixed_pos_rand @ torch.diag(hand_init_pos_rand)
             above_fixed_pos[bad_envs] += above_fixed_pos_rand
+            ## above_fixed_pos has coords of randomized inital eef position wrt envs origin
+
+            custom_hand_pos = self.custom_hand_pos_randomization(bad_envs, world_coords=False, fixed_asset_pos=fixed_pos) ## dim = (n_bad, 3)
+            custom_hand_pos = custom_hand_pos.float()
+
+            ## mask1 to choose between custom randomization vs default randomization
+            ### this selection works i have checked it in segment indepenedetly 
+            mask1 = torch.rand(n_bad, device=self.device) < 0.5
+            mask1 = mask1[:, None]
+
+            above_fixed_pos[bad_envs] = torch.where(mask1, custom_hand_pos, above_fixed_pos[bad_envs])
+            above_fixed_pos = above_fixed_pos.float()
+
 
             # (b) get random orientation facing down
             hand_down_euler = (
@@ -1055,6 +879,7 @@ class FactoryEnv(DirectRLEnv):
             bad_envs = bad_envs[any_error.nonzero(as_tuple=False).squeeze(-1)]
 
             # Check IK succeeded for all envs, otherwise try again for those envs
+            print("ik_attempt ", ik_attempt)
             if bad_envs.shape[0] == 0:
                 break
 
@@ -1063,7 +888,19 @@ class FactoryEnv(DirectRLEnv):
             )
 
             ik_attempt += 1
+            
 
+        ## enable collisions here
+        # prim_path = self._fixed_asset.cfg.prim_path
+        # modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=True))
+
+        # for i in range(self.num_envs):
+        #     prim_path = f"/World/envs/env_{i}/FixedAsset"
+        #     modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=True))
+
+        self._fixed_asset.write_root_pose_to_sim(self.fixed_state[:, 0:7], env_ids=env_ids)
+        self._fixed_asset.write_root_velocity_to_sim(self.fixed_state[:, 7:], env_ids=env_ids)
+        self._fixed_asset.reset()
         self.step_sim_no_action()
 
         # Add flanking gears after servo (so arm doesn't move them).
@@ -1186,8 +1023,91 @@ class FactoryEnv(DirectRLEnv):
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
 
+    def noising_relative_pos_wrt_hole_centre(self, n_bad, radius, theta, height, radius_noise_bound, theta_noise_bound, height_noise_bound):
 
-    def get_asset_information(self):
+        """
+        height = 0
+        radius = outer radius of fixed asset with offset
+        theta = 1
+
+        it gives a noised pos wrt the hole centre that needs to be added to the hole centre coords
+        noised_peg_tip_pos = coords_hole_centre + noised_pos_wrt_hole_centre
+        noised_fingertip_midpoint_pos = noised_peg_tip_pos + translation_peg_tip_to_fingertip_midpoint
+        """
+
+        
+        ## [0,1] * radius_noise_bound
+        radius_noise = np.random.rand(n_bad)*radius_noise_bound
+
+        ## [-1,1] * theta_noise_bound(pi) --> [-pi,pi]
+        theta_noise = 2*(np.random.rand(n_bad) - 0.5)*theta_noise_bound
+
+        ## [-0.8, 0.2] * height_noise_bound
+        height_noise = (np.random.rand(n_bad) - 0.8)*height_noise_bound
+
+        noised_radius = radius + radius_noise
+        noised_theta = theta + theta_noise
+        noised_height = height + height_noise
+        
+        noised_peg_tip_pos_wrt_hole_centre = np.zeros((n_bad,3))
+
+        noised_peg_tip_pos_wrt_hole_centre[:,0] = noised_radius*np.cos(noised_theta)
+        noised_peg_tip_pos_wrt_hole_centre[:,1] = noised_radius*np.sin(noised_theta)
+        noised_peg_tip_pos_wrt_hole_centre[:,2] = noised_height
+
+        noised_peg_tip_pos_wrt_hole_centre = torch.from_numpy(noised_peg_tip_pos_wrt_hole_centre).to(self.device)
+        
+
+        return noised_peg_tip_pos_wrt_hole_centre
+
+    def custom_hand_pos_randomization(self, bad_envs, world_coords=True, fixed_asset_pos=None):
+
+        asset_info = self.get_asset_information(hole_base_center_coords=fixed_asset_pos)
+
+        height_wrt_hole = -0.016 # 0 
+        height_noise_bounds = 0.008
+
+        outer_radius = 5*asset_info["fixed_asset_diameter"]/2 + 0.002
+        # outer_radius = 5*asset_info["fixed_asset_diameter"]/2 + 0.009
+        radius_noise_bound = 0.008
+
+        theta_wrt_hole = 0
+        theta_noise_bound = 3.14
+
+        n_bad = bad_envs.shape[0]
+
+        noised_peg_tip_pos_wrt_hole_centre = self.noising_relative_pos_wrt_hole_centre(n_bad, outer_radius, theta_wrt_hole, height_wrt_hole, radius_noise_bound, theta_noise_bound, height_noise_bounds)
+
+        
+        
+        
+        if isinstance(bad_envs, np.ndarray):
+            bad_envs = torch.from_numpy(bad_envs).to(self.device)
+
+        hole_center_coords = torch.from_numpy(asset_info["hole_center_coords"]).to(self.device)
+        peg_tip_pos = torch.from_numpy(asset_info["held_asset_bottom_coords"]).to(self.device)
+
+        
+        noised_peg_tip_abs = hole_center_coords[bad_envs] + noised_peg_tip_pos_wrt_hole_centre
+        ## noised_peg_tip_abs is wrt world coordinates
+
+        # fingertip_midpoint_pos = torch.from_numpy(asset_info["fingertip_midpoint_pos"]).to(self.device)
+        # translation_peg_tip_to_fingertip_midpoint = self.fingertip_midpoint_pos[bad_envs] + self.scene.env_origins[bad_envs] - peg_tip_pos[bad_envs]
+        # translation_peg_tip_to_fingertip_midpoint = fingertip_midpoint_pos[bad_envs] - peg_tip_pos[bad_envs]
+        noised_fingertip_midpoint_pos = noised_peg_tip_abs.clone()
+        noised_fingertip_midpoint_pos[:, 2] += 0.03239
+        
+        # self.unnoised_peg_tip_pos = peg_tip_pos
+        # self.unnoised_fingertip_midpoint_positions = fingertip_midpoint_pos
+        self.custom_noised_peg_tip_positions = noised_peg_tip_abs
+        self.custom_noised_fingertip_midpoint_positions = noised_fingertip_midpoint_pos
+
+        if not world_coords:
+            noised_fingertip_midpoint_pos = noised_fingertip_midpoint_pos - self.scene.env_origins[bad_envs]
+
+        return noised_fingertip_midpoint_pos
+
+    def get_asset_information(self, hole_base_center_coords=None):
         """
         Get comprehensive information about the fixed and held assets.
         
@@ -1200,12 +1120,18 @@ class FactoryEnv(DirectRLEnv):
                 - held_asset_height: Height of the held asset
                 - fixed_asset_height: Height of the fixed asset
                 - fixed_asset_base_height: Base height of the fixed asset
+                - fingertip_midpoint_pos
         """
         # Get current asset poses and configurations
         # self._compute_intermediate_values(dt=self.physics_dt)
         
+        self._compute_intermediate_values(dt=self.physics_dt)
         # Fixed asset information (hole)
-        hole_base_center_coords = self.fixed_pos + self.scene.env_origins  # World coordinates
+        if hole_base_center_coords is None:
+            hole_base_center_coords = self.fixed_pos.clone() ## coords wrt env origin
+        
+        hole_base_center_coords = hole_base_center_coords + self.scene.env_origins ## coords wrt world origin
+        
         hole_base_frame = self.fixed_quat  # Orientation frame
         
         hole_center_coords = hole_base_center_coords
@@ -1232,6 +1158,8 @@ class FactoryEnv(DirectRLEnv):
             self.identity_quat, 
             held_asset_bottom_local
         )
+
+        fingertip_midpoint_pos = self.fingertip_midpoint_pos.clone() + self.scene.env_origins
         
         # Create comprehensive information dictionary
         asset_info = {
@@ -1244,137 +1172,35 @@ class FactoryEnv(DirectRLEnv):
             'held_asset_height': held_asset_height,
             'held_asset_diameter': held_asset_diameter,
             'task_name': self.cfg_task.name,
-            'num_envs': self.num_envs
+            'num_envs': self.num_envs,
+            'fingertip_midpoint_pos': fingertip_midpoint_pos.detach().cpu().numpy()
         }
         
         return asset_info
 
-    def print_asset_information(self, env_idx=0):
-        """
-        Print detailed asset information for a specific environment.
-        
-        Args:
-            env_idx (int): Environment index to print information for (default: 0)
-        """
-        asset_info = self.get_asset_information()
-        
-        print(f"\n=== Asset Information for Environment {env_idx} ===")
-        print(f"Task: {asset_info['task_name']}")
-        print(f"\nFixed Asset (Hole):")
-        print(f"  - Center coordinates: {asset_info['hole_center_coords'][env_idx]}")
-        print(f"  - Orientation frame (quaternion): {asset_info['hole_frame'][env_idx]}")
-        print(f"  - Diameter: {asset_info['fixed_asset_diameter']:.6f} m")
-        print(f"  - Height: {asset_info['fixed_asset_height']:.6f} m")
-        print(f"  - Base height: {asset_info['fixed_asset_base_height']:.6f} m")
-        
-        print(f"\nHeld Asset (Peg):")
-        print(f"  - Bottom coordinates: {asset_info['held_asset_bottom_coords'][env_idx]}")
-        print(f"  - Height: {asset_info['held_asset_height']:.6f} m")
-        print(f"  - Diameter: {asset_info['held_asset_diameter']:.6f} m")
-        
-        # Calculate clearance (difference between hole and peg diameters)
-        clearance = asset_info['fixed_asset_diameter'] - asset_info['held_asset_diameter']
-        print(f"\nAssembly Information:")
-        print(f"  - Clearance (hole_diameter - peg_diameter): {clearance:.6f} m")
-        print(f"  - Clearance percentage: {(clearance/asset_info['fixed_asset_diameter'])*100:.2f}%")
 
-    def get_hole_center_and_frame(self):
-        """
-        Get the center coordinates and orientation frame of the hole (fixed asset).
-        
-        Returns:
-            tuple: (hole_center_coords, hole_frame)
-                - hole_center_coords: numpy array of shape (num_envs, 3) with world coordinates
-                - hole_frame: numpy array of shape (num_envs, 4) with quaternion orientations
-        """
-        self._compute_intermediate_values(dt=self.physics_dt)
-        
-        # Fixed asset information (hole)
-        hole_center_coords = self.fixed_pos + self.scene.env_origins  # World coordinates
-        hole_frame = self.fixed_quat  # Orientation frame
-        
-        return hole_center_coords.detach().cpu().numpy(), hole_frame.detach().cpu().numpy()
 
-    def get_held_asset_bottom_coords(self):
-        """
-        Get the bottom coordinates of the held asset (peg).
-        
-        Returns:
-            numpy.ndarray: Array of shape (num_envs, 3) with world coordinates of held asset bottom
-        """
-        self._compute_intermediate_values(dt=self.physics_dt)
-        
-        # Calculate held asset bottom coordinates
-        held_asset_bottom_local = torch.zeros_like(self.held_base_pos_local)
-        held_asset_bottom_local[:, 2] = 0.0  # Bottom is at z=0 in local frame
-        
-        # Transform to world coordinates
-        held_asset_bottom_quat, held_asset_bottom_coords = torch_utils.tf_combine(
-            self.held_quat, 
-            self.held_pos + self.scene.env_origins,  # World position
-            self.identity_quat, 
-            held_asset_bottom_local
-        )
-        
-        return held_asset_bottom_coords.detach().cpu().numpy()
+## held_asset diameter = 0.007986
+## fixed_asset diameter = 0.00810
+## height of hole = 0.025 
+## height of peg = 0.05
 
-    def get_asset_dimensions(self):
-        """
-        Get the dimensions of both fixed and held assets.
-        
-        Returns:
-            dict: Dictionary containing:
-                - fixed_asset_diameter: Diameter of the fixed asset (hole)
-                - fixed_asset_height: Height of the fixed asset
-                - fixed_asset_base_height: Base height of the fixed asset
-                - held_asset_diameter: Diameter of the held asset (peg)
-                - held_asset_height: Height of the held asset
-        """
-        return {
-            'fixed_asset_diameter': self.cfg_task.fixed_asset_cfg.diameter,
-            'fixed_asset_height': self.cfg_task.fixed_asset_cfg.height,
-            'fixed_asset_base_height': self.cfg_task.fixed_asset_cfg.base_height,
-            'held_asset_diameter': self.cfg_task.held_asset_cfg.diameter,
-            'held_asset_height': self.cfg_task.held_asset_cfg.height,
-        }
 
-# def main():
-#     factory_cfg = FactoryTaskPegInsertCfg()
-#     factory_cfg.num_envs = args_cli.num_envs
+## get the radius of the outer surface of the peg = 0.023, radius_noise_bound = 0.008
+## get the fingertip midpoint pose and its translation from hole center (fixed_pos_obs_frame) 
 
-#     factory_env = FactoryEnv(factory_cfg)
-    
-#     marker_visualizer = create_markers()
 
-#     print("[INFO]: Factory environment created successfully ----- yo ----.")
-#     # simulate physics
-#     count = 0
-#     print(f"[INFO]: Gym observation space: {env.observation_space}")
-#     # print(f"[info] single observation space {env.single_observation_space.shape}")
-#     # print(f"[INFO]: Gym single Observation space shape: {env.unwrapped.single_observation_space.shape}")
-#     print(f"[INFO]: Gym action space: {env.action_space}")
-#     print(f"[INFO]: Gym single action space shape: {env.single_action_space.shape}")
-#     print(f"[INFO]: Single action space high: {env.single_action_space.high}")
-#     print(f"[INFO]: Single action space low: {env.single_action_space.low}")
+### task2 intialize the hole way above the task
+### and then bring down after the eef has reached its initial randomied positions
 
-#     factory_env.visualize_env_markers()
-#     count = 0
-#     # while simulation_app.is_running():
-#     #     with torch.inference_mode():
-            
-#     #         if count % 100 == 0:
-#     #             print(f"[INFO]: Simulation step: {count}")
-#     #             count = 0
-#     #             env.reset()
-            
-#     #         ## sampling random actions
-#     #         actions = torch.rand
-            
-#     #         count += 1
-            
+"""
+intial height of the peg from cfg 
+approach 1) instead of chaning the cfg file of the fixed asset articulation
+-> lets just change the _set_assets_to_default_pose function write the intialize with high z fixed asset
+-> then in randomize_near_goal_state function dont write fixed_state to fixed asset at the begining 
+-> write it to fixed_Asset sim after the ik solver has made the eef reach the random positons
 
-# if __name__ == "__main__":
+requirements approach 1) 
+high z: 
 
-#     main()
-
-#     simulation_app.close()
+"""

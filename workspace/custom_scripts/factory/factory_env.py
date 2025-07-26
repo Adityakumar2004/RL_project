@@ -482,10 +482,10 @@ class FactoryEnv(DirectRLEnv):
         )
 
         # set target for gripper joints to use physx's PD controller
-        self.ctrl_target_joint_pos[:, 7:9] = self.ctrl_target_gripper_dof_pos
+        self.ctrl_target_joint_pos[:, 7:9] = self.
         self.joint_torque[:, 7:9] = 0.0
 
-        self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
+        self._robot.set_joint_position_target(self.ctrl_target_joint_poctrl_target_gripper_dof_poss)
         self._robot.set_joint_effort_target(self.joint_torque)
 
     def _get_dones(self):
@@ -1012,6 +1012,9 @@ class FactoryEnv(DirectRLEnv):
         }
         
         return asset_info
+
+
+        
 
 
 # def main():

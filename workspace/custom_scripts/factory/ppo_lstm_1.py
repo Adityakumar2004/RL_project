@@ -397,7 +397,7 @@ class env_wrapper(gym.Wrapper):
 
         obs, rewards, terminations, truncations, info = self.env.step(actions)
 
-        rewards = self.calculate_rewards(output_type=self.output_type)
+        rewards = self.calculate_rewards(rewards_task2=rewards, output_type=self.output_type)
 
 
         info_custom = {}
@@ -519,7 +519,7 @@ class env_wrapper(gym.Wrapper):
         print("[INFO] Environment set to EVALUATION mode.")
         self.training = False
 
-    def calculate_rewards(self, output_type):
+    def calculate_rewards(self, output_type, rewards_task2):
 
         asset_info = self.unwrapped.get_asset_information()
         held_asset_coords = asset_info['held_asset_bottom_coords']
@@ -527,7 +527,7 @@ class env_wrapper(gym.Wrapper):
         hole_center_coords = asset_info["hole_center_coords"]
         radius = asset_info["fixed_asset_diameter"]/2
 
-        reward = reward_function(hole_center_coords, held_asset_coords, xy_threshold = (1.5*radius)**2, alpha = 100.0, beta = 100)
+        reward = reward_function(rewards_task2, hole_center_coords, held_asset_coords, xy_threshold = (1.5*radius)**2, z_epsilon = 0.006, alpha = 100.0, beta = 100)
 
         if output_type == "numpy":
             reward = reward.cpu().numpy()
@@ -537,7 +537,7 @@ class env_wrapper(gym.Wrapper):
         return reward
 
 
-def reward_function(x_desired, x_current, xy_threshold, alpha = 15.0, beta = 50):
+def reward_function(rewards_task2, x_desired, x_current, xy_threshold, z_epsilon = 0.006, alpha = 15.0, beta = 50):
     """
     Computes the reward as exp(-alpha * ||x_current - x_desired||^2)
     using a consistent NumPy-style computation.
@@ -552,18 +552,36 @@ def reward_function(x_desired, x_current, xy_threshold, alpha = 15.0, beta = 50)
     else:
         raise AssertionError("x_current and x_desired must be torch.Tensor or np.ndarray")
     
+    if isinstance(rewards_task2, torch.Tensor):
+        rewards_task2 = rewards_task2.cpu().numpy()
+    elif isinstance(rewards_task2, np.ndarray):
+        pass
+    else:
+        raise AssertionError("rewards_task2 must be torch.Tensor or np.ndarray")
+    
     squared_x = x*x
 
     norm_squared_xy = np.sum(squared_x[:,:2], axis=-1)  
     reward = np.exp(-alpha * norm_squared_xy)/4
 
-    mask = norm_squared_xy < xy_threshold
+    mask_xy = norm_squared_xy < xy_threshold
     z_term = np.exp(-beta * squared_x[:,2])/4
-    # reward += np.where(mask, 0.25, z_term)
-    reward += z_term
+    # reward += np.where(mask_xy, 0.25, z_term)
 
-    larger_mask = np.sum(squared_x, axis=-1) < 0.00004
-    reward += np.where(larger_mask, 0.25, 0.0)
+
+    ## this reward worked very good for task1 only havent checked in commbination with task2 
+
+    # reward += z_term
+    # larger_mask = np.sum(squared_x, axis=-1) < 0.00004    
+    # reward += np.where(larger_mask, 0.25, 0.0)
+    
+    ## reward for task 1 and task 2 combined
+    z_mask =  x_current[:, 2] < x_desired[:, 2] + z_epsilon
+
+    total_mask = mask_xy & z_mask
+
+    reward += np.where(total_mask, 0.5, z_term) + np.where(total_mask, rewards_task2, 0.0)
+
     
 
     return reward
@@ -646,7 +664,7 @@ if __name__ == "__main__":
     # video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_1")
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
     os.makedirs(checkpoint_folder, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_folder, "cp_lstm_task1.pt")
+    checkpoint_path = os.path.join(checkpoint_folder, "cp_lstm_task2_2.pt")
     
     args = Args()
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")

@@ -31,6 +31,7 @@ import numpy as np
 import torch
 from isaaclab_tasks.utils import parse_env_cfg
 import imageio
+import time
 
 
 
@@ -163,12 +164,12 @@ def reward_function(x_desired, x_current, xy_threshold, alpha = 15.0, beta = 50)
 
 
 
-def create_marker_spheres(env, count, color=(1.0, 0.0, 0.0)):
+def create_marker_spheres(env, count, color=(1.0, 0.0, 0.0), radius = 0.001):
 
     sphere_markers = {}
     for i in range(count):
         sphere_markers[f"sphere_{i}"] = sim_utils.SphereCfg(
-            radius = 0.001,
+            radius = radius,#0.001,
             visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color = color),
         )
     
@@ -242,7 +243,7 @@ def make_env(video_folder:str | None =None):
     
     
     return env
-
+ 
 
 def main():
     
@@ -277,23 +278,12 @@ def main():
     # env.unwrapped.create_marker_spheres(4)
     # held_asset_viz = create_marker_spheres(env, 4)
     # fixed_asset_viz = create_marker_spheres(env, 4, (0.0, 1.0, 0.0))
-    held_asset_coord_viz = create_marker_spheres(env, 1, (0.0, 0.0, 1.0))
+    held_asset_coord_viz = create_marker_spheres(env, 1, (0.0, 0.0, 1.0), radius = 0.005) ## blue
+    custom_noised_peg_tip_viz = create_marker_spheres(env, 1, (1.0, 0.0, 0.0), radius = 0.005) ## red
+    unnoised_peg_tip_viz = create_marker_spheres(env, 1, (0.0, 1.0, 0.0), radius = 0.05) ## green
+
     fixed_asset_coord_viz = create_marker_spheres(env, 3, (0.0, 1.0, 0.0))
     
-    # simulate environment
-
-    print("max length of episode ", env.unwrapped.max_episode_length)
-    print("action space shape ", env.action_space.shape)
-    print(env.unwrapped.scene["robot"].joint_names)
-
-
-
-    # print(env.unwrapped.actions.action_term_groups["joint_efforts"])
-    # If you want to inspect available action terms, try accessing them via the scene or print available attributes:
-    # print(dir(env.unwrapped))
-    # Or, for example, if the scene has action terms:
-    # print(dir(env.unwrapped.action_manager))
-    # print("checking the variables: decimation, episode_length_s, sim.dt in env ", env.unwrapped.episode_length_s/(env.unwrapped.sim.dt*env.unwrapped.decimation))
 
     
     camera_flag = 0
@@ -308,8 +298,8 @@ def main():
 
     joint_efforts = env.unwrapped.scene["robot"].data.applied_torque
     num_joints = joint_efforts.shape[-1]
-    print(f"Number of joints: {num_joints}")
-    print(f"Joint values: {joint_efforts.cpu().numpy()[0:]}")
+    # print(f"Number of joints: {num_joints}")
+    # print(f"Joint values: {joint_efforts.cpu().numpy()[0:]}")
 
 
 
@@ -327,12 +317,14 @@ def main():
                 else:
                     actions = -1*torch.ones(env.action_space.shape, device=env.device)
                     flag = 0
+                
                 # print("[INFO]: Current observations: \n", obs)
                 # print("[INFO]: terminations and truncations \n",terminations, "\n",truncations)
                 # print("actions \n",actions)
                 # print("[INFO]: infos: \n", infos)
                 print("count :", cnt)
             
+            actions = torch.zeros(env.action_space.shape, device=env.device)
             # print("keypoints_held: \n", env.unwrapped.keypoints_held)
 
             # print(env.unwrapped.keypoints_held.shape)
@@ -348,12 +340,54 @@ def main():
             fixed_asset_coords = asset_info["hole_center_coords"]
 
             radius = asset_info["fixed_asset_diameter"]/2
-            fixed_asset_radii_point = fixed_asset_coords + np.array([0, radius, 0])
-            fixed_asset_radii_point_half = fixed_asset_coords + np.array([0, radius + radius/2, 0])
+
+            expr1 = "5 * radius"
+            expr2 = "3*radius + radius/2"
+            r1 = round(float(eval(expr1)), 5)
+            r2 = round(float(eval(expr2)), 5)
+
+            fixed_asset_radii_point = fixed_asset_coords + np.array([0, r1, 0])
+            fixed_asset_radii_point_half = fixed_asset_coords + np.array([0, r2, 0])
+
+            fingertip_midpoint_pos = env.unwrapped.fingertip_midpoint_pos
+            fingertip_midpoint_pos = fingertip_midpoint_pos + env.unwrapped.scene.env_origins
+            fingertip_midpoint_pos = fingertip_midpoint_pos.cpu().numpy()
 
             stacked_hole_pts = np.stack([fixed_asset_coords, fixed_asset_radii_point, fixed_asset_radii_point_half], axis=1)
 
-            print("---"*10)
+            # print(f"radius {radius}, {expr1} {r1}, {expr2} {r2}")
+            
+            # print("fixed_asset_height ", asset_info["fixed_asset_height"])
+            # print("held_asset_height ", asset_info["held_asset_height"] )
+            # print("fingertip_midpoint_pos ", fingertip_midpoint_pos)
+            
+            custom_noised_fingertip_midpoint_positions = env.unwrapped.custom_noised_fingertip_midpoint_positions.cpu().numpy()
+            custom_noised_peg_tip_positions = env.unwrapped.custom_noised_peg_tip_positions.cpu().numpy()
+            # unnoised_peg_tip_positions = env.unwrapped.unnoised_peg_tip_pos.cpu().numpy()
+            # unnoised_fingertip_midpoint_positions = env.unwrapped.unnoised_fingertip_midpoint_positions.cpu().numpy()
+            # print("custom_positons ", custom_positions)
+
+
+            origins = env.unwrapped.scene.env_origins.cpu().numpy()
+            position = np.zeros((env.unwrapped.num_envs, 3))
+            position[:, 2] = 2
+            position = position + origins
+
+            fixed_asset_pos = env.unwrapped._fixed_asset.data.default_root_state.clone().cpu().numpy()
+            fixed_asset_pos = fixed_asset_pos[:,:3]
+            
+            # print("noised_peg_tip_pos \n", custom_noised_peg_tip_positions)
+            # print("noised_fingertip_midpoint_pos \n", custom_noised_fingertip_midpoint_positions)
+
+            fixed_state = env.unwrapped.fixed_state[:,:3].cpu().numpy()
+
+            # print("fixed_asset_pos \n ", )
+
+
+
+
+
+            # print("---"*10)
             
 
 
@@ -365,15 +399,19 @@ def main():
             # env.unwrapped.visualize_spheres(keypoints_held)
 
             ## -----------------   visualization stuff -----------------------------
-            visualize_spheres(env, held_asset_coord_viz, held_asset_coords)
-            visualize_spheres(env, fixed_asset_coord_viz, stacked_hole_pts)
+            visualize_spheres(env, held_asset_coord_viz, custom_noised_fingertip_midpoint_positions) #fingertip_midpoint_pos) ## blue
+            visualize_spheres(env, custom_noised_peg_tip_viz, custom_noised_peg_tip_positions) #fixed_state) ## red
+            # visualize_spheres(env, unnoised_peg_tip_viz, unnoised_peg_tip_positions) ## green
+            # visualize_spheres(env, fixed_asset_coord_viz, stacked_hole_pts)
             # visualize_spheres(env, fixed_pos_coords_viz, fixed_pos_coords)
             # visualize_spheres(env, held_asset_viz, keypoints_held)
             # visualize_spheres(env, fixed_asset_viz, keypoints_fixed)
             
             # apply actions
             next_obs, rewards, terminations, truncations =  env.step(actions)
-            print("rewards \n", rewards)
+            # env.unwrapped.step_sim_no_action()
+            # time.sleep(0.1)
+            # print("rewards \n", rewards)
 
 
 
