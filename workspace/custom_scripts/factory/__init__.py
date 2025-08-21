@@ -23,6 +23,16 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-Factory-PegInsert-Direct-Custom-v0",
+    entry_point="custom_scripts.factory.factory_env:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "custom_scripts.factory.factory_env_cfg:FactoryTaskPegInsertCfg",
+        "rl_games_cfg_entry_point": f"custom_scripts.factory.agents:rl_games_ppo_cfg.yaml",
+    },
+)
+
 # gym.register(
 #     id="Isaac-Factory-GearMesh-Direct-v0",
 #     entry_point="isaaclab_tasks.direct.factory:FactoryEnv",

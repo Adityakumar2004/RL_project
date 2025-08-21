@@ -1,3 +1,4 @@
+```mermaid
 flowchart TD
     %% Command-line and Hydra argument flow
     CLI["Command-line Arguments"] -->|parse_known_args| PARSER["argparse.ArgumentParser"]
@@ -54,3 +55,4 @@ flowchart TD
         ACTOR -- "Uses obs (policy)" --> CRITIC
         CRITIC -- "Uses state (critic)" --> ACTOR
     end
+```

@@ -611,8 +611,10 @@ class FactoryEnv(DirectRLEnv):
         self.step_sim_no_action()
 
         # self.randomize_initial_state(env_ids)
-        
-        self.randomize_near_goal_state(env_ids)
+        if self.changes_bool:
+            self.randomize_near_goal_state(env_ids)
+        else:
+            self.randomize_initial_state(env_ids)
 
     def _get_target_gear_base_offset(self):
         """Get offset of target gear from the gear base asset."""
@@ -638,7 +640,8 @@ class FactoryEnv(DirectRLEnv):
 
         fixed_state = self._fixed_asset.data.default_root_state.clone()[env_ids]
         fixed_state[:, 0:3] += self.scene.env_origins[env_ids]
-        fixed_state[:,2] = 5
+        if self.changes_bool:
+            fixed_state[:,2] = 5
         fixed_state[:, 7:] = 0.0
 
         ## disable collisions here 
@@ -773,8 +776,6 @@ class FactoryEnv(DirectRLEnv):
         # (1.c.) Velocity
         fixed_state[:, 7:] = 0.0  # vel
 
-        # if self.changes_bool:
-            # fixed_state = self._fixed_asset.data.default_root_state.clone()[env_ids]
 
         self.fixed_state = fixed_state.clone()  ## fixed state has coords of hole_base wrt world origin   
         # print("fixed_asset_pos \n ", fixed_state[:,:3])
@@ -788,9 +789,10 @@ class FactoryEnv(DirectRLEnv):
         #     prim_path = f"/World/envs/env_{i}/FixedAsset"
         #     modify_collision_properties(prim_path, CollisionPropertiesCfg(collision_enabled=False))
 
-        # self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
-        # self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
-        # self._fixed_asset.reset()
+        if not self.changes_bool:
+            self._fixed_asset.write_root_pose_to_sim(fixed_state[:, 0:7], env_ids=env_ids)
+            self._fixed_asset.write_root_velocity_to_sim(fixed_state[:, 7:], env_ids=env_ids)
+            self._fixed_asset.reset()
 
         # (1.e.) Noisy position observation.
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)

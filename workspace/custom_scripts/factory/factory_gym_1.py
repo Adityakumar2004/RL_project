@@ -218,6 +218,7 @@ def visualize_spheres(env, env_marker_visualizer, pose):
         marker_indices=marker_indices
     )
 
+
 def make_env(video_folder:str | None =None):
 
     id_name = "peg_insert-v0-uw"

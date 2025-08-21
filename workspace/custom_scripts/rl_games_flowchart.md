@@ -1,0 +1,15 @@
+```mermaid
+flowchart TD
+    A["train.py"] --> B["factory/__init__.py"]
+    B --> C["factory_env.py"]
+    B --> D["factory_env_cfg.py"]
+    B --> E["agents/rl_games_ppo_cfg.yaml"]
+    A --> F["isaaclab_rl/rl_games.py"]
+    F --> G["rl_games/torch_runner.py"]
+    G --> H["rl_games/common/a2c_common.py"]
+    G --> I["rl_games/algos_torch/a2c_continuous.py"]
+    G --> J["rl_games/common/env_configurations.py"]
+    G --> K["rl_games/common/vecenv.py"]
+    G --> L["rl_games/common/algo_observer.py"]
+    H --> M["rl_games/networks/"]
+    H --> N["rl_games/algos_torch/model_builder.py"]
