@@ -400,7 +400,7 @@ def main():
             # env.unwrapped.visualize_spheres(keypoints_held)
 
             ## -----------------   visualization stuff -----------------------------
-            visualize_spheres(env, held_asset_coord_viz, custom_noised_fingertip_midpoint_positions) #fingertip_midpoint_pos) ## blue
+            visualize_spheres(env, held_asset_coord_viz, origins) #fingertip_midpoint_pos) ## blue
             visualize_spheres(env, custom_noised_peg_tip_viz, custom_noised_peg_tip_positions) #fixed_state) ## red
             # visualize_spheres(env, unnoised_peg_tip_viz, unnoised_peg_tip_positions) ## green
             # visualize_spheres(env, fixed_asset_coord_viz, stacked_hole_pts)

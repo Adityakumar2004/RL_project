@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from agents_defn import Agent
 
+import csv
 
 class RunningNormalizer:
     def __init__(self, size, epsilon=1e-5, clip_range=5.0):
@@ -186,6 +187,7 @@ class env_wrapper(gym.Wrapper):
         self.unwrapped.cameras[camera_id].set_world_poses_from_view(eye_camera.unsqueeze(0), camera_target.unsqueeze(0))
         
     def record_cameras(self):
+        frame_dict = {}
         for i, camera in enumerate(self.unwrapped.cameras):
 
             cam_image = camera.data.output["rgb"]
@@ -195,9 +197,13 @@ class env_wrapper(gym.Wrapper):
             ## removing batch dimension
             if cam_image.shape[0] == 1:
                 cam_image = cam_image[0]
-            
+
+            frame_dict[f"camera_{i}"] = cam_image
+
             cam_image = cam_image.astype(np.uint8)
             self.vid_writers[i].append_data(cam_image)
+
+        return frame_dict
 
     def train(self):
         print("[INFO] Environment set to TRAINING mode.")
@@ -299,8 +305,12 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
     return env
 
 
-def TestingAgent(env, device, num_envs, agent, checkpoint_path, num_episodes = 2, recording_enabled=True, critic_normalization = True):
+def TestingAgent(env, device, num_envs, agent, checkpoint_path, num_episodes = 2, recording_enabled=True, critic_normalization = True, sim_step_func=None, **kwargs):
     
+    # file_path = os.path.join("custom_scripts", "logs", "ppo_factory", "csv_files", "log_values_ik.csv")
+
+    file_path = kwargs["file_path"]
+
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found at {checkpoint_path}")
         return
@@ -335,6 +345,9 @@ def TestingAgent(env, device, num_envs, agent, checkpoint_path, num_episodes = 2
         rewards_list = []
         raw_reward_list = []
         all_success_rates = []
+
+
+
         for i in range(num_episodes):
             env.eval()
             obs, _ = env.reset()
@@ -344,10 +357,18 @@ def TestingAgent(env, device, num_envs, agent, checkpoint_path, num_episodes = 2
             torch.zeros(agent.num_layers, num_envs, agent.hidden_size).to(device),
             torch.zeros(agent.num_layers, num_envs, agent.hidden_size).to(device),
             )
-            dones = torch.zeros((env.num_envs), device = device)
+            dones = torch.zeros((env.unwrapped.num_envs), device = device)
+            
+            # step_cntr = 0
+            if sim_step_func is not None:
+                sim_step_func(env=env, step = step_cntr, file_path = file_path)
 
             while not done_flag:
+                step_cntr += 1
                 actions, _, _, next_lstm_state_actor, a_mu, a_std= agent.get_action(obs, next_lstm_state_actor, dones)
+
+                if sim_step_func is not None:
+                    sim_step_func(env=env, step = step_cntr, file_path = file_path)
 
                 next_obs, rewards, terminations, truncations, info_custom = env.step(actions)
                 
@@ -387,7 +408,7 @@ def TestingAgent(env, device, num_envs, agent, checkpoint_path, num_episodes = 2
                     total_reward = 0
                     total_raw_reward = 0
 
-                step_cntr += 1
+                # step_cntr += 1
 
                 ## recording the video
                 if recording_enabled:
@@ -438,3 +459,73 @@ def bound_loss(mu):
     b_loss = b_loss.mean()
 
     return b_loss
+
+
+## utils for analysis 
+def target_dof_torque_log(env, step, file_path:str):
+
+    joint_torques = env.unwrapped.joint_torque[0,:7].cpu().numpy().tolist()
+
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    file_exists = os.path.isfile(file_path)
+    with open(file_path, mode='a', newline="") as f:
+
+        writer = csv.writer(f)
+
+        if not file_exists:
+            header = ['step'] + [f"joint_{i}" for i in range(len(joint_torques))]
+            print("writing the header")
+            writer.writerow(header)
+        
+        writer.writerow([step] + joint_torques)
+
+def log_values(env, step, file_path:str):
+    '''this function logs all the values of the logging_values dict for the 0th env id'''
+
+    logging_values = env.unwrapped.logging_values
+    joint_torques = logging_values.get("dof_torques", np.zeros((1, 7)))[0].tolist()
+    raw_actions = logging_values.get("raw_action", np.zeros((1, 3)))[0, :3].tolist()
+    processed_actions = logging_values.get("processed_action", np.zeros((1, 3)))[0, :3].tolist()
+    target_fingertip_pos = logging_values.get("target_fingertip_pos", np.zeros((1, 3)))[0].tolist()
+    fixed_pos_obs_frame = logging_values.get("fixed_pos_obs_frame", np.zeros((1, 3)))[0].tolist()
+    fingertip_midpoint_pos = logging_values.get("fingertip_midpoint_pos", np.zeros((1, 3)))[0].tolist()
+    current_joint_pos = logging_values.get("current_joint_pos", np.zeros((1, 7)))[0].tolist()
+    
+    if "target_joint_pos" in logging_values:
+        target_joint_pos = logging_values.get("target_joint_pos", np.zeros((1, 7)))[0].tolist()
+
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    file_exists = os.path.isfile(file_path)
+    with open(file_path, mode='a', newline="") as f:
+
+        writer = csv.writer(f)
+
+        if not file_exists:
+            header = ["step"]
+            header = header + [f"dof_torque_{i}" for i in range(len(joint_torques))]
+            header = header + [f"raw_action_{i}" for i in range(len(raw_actions))]
+            header = header + [f"processed_action_{i}" for i in range(len(processed_actions))]
+            header = header + [f"target_fingertip_pos_{i}" for i in range(len(target_fingertip_pos))]
+            header = header + [f"fixed_pos_obs_frame_{i}" for i in range(len(fixed_pos_obs_frame))]
+            header = header + [f"fingertip_midpoint_pos_{i}" for i in range(len(fingertip_midpoint_pos))]
+            header = header + [f"current_joint_pos_{i}" for i in range(len(current_joint_pos))]
+
+            if "target_joint_pos" in logging_values:
+                header = header + [f"target_joint_pos_{i}" for i in range(len(target_joint_pos))]
+
+            writer.writerow(header)
+
+        writer.writerow([step] 
+                        + joint_torques
+                        + raw_actions
+                        + processed_actions
+                        + target_fingertip_pos
+                        + fixed_pos_obs_frame
+                        + fingertip_midpoint_pos
+                        + current_joint_pos
+                        + (
+                            target_joint_pos
+                            if "target_joint_pos" in logging_values
+                            else []
+                          )
+                        )

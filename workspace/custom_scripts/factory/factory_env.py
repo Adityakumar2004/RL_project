@@ -40,9 +40,9 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat
 
 from custom_scripts.factory import factory_control as fc
-from custom_scripts.factory.factory_env_cfg_kinovo import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
-from custom_scripts.factory.factory_env_cfg_kinovo import FactoryTaskPegInsertCfg
-
+from custom_scripts.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
+from custom_scripts.factory.factory_env_cfg import FactoryTaskPegInsertCfg
+from isaaclab.controllers import DifferentialIKController
 from isaaclab.sensors import CameraCfg, Camera
 
 class FactoryEnv(DirectRLEnv):
@@ -55,7 +55,7 @@ class FactoryEnv(DirectRLEnv):
         cfg.observation_space += cfg.action_space
         cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
-
+        self.logging_values = {}
         super().__init__(cfg, render_mode, **kwargs)
 
         self.changes_bool = True
@@ -63,6 +63,8 @@ class FactoryEnv(DirectRLEnv):
         self._init_tensors()
         self._set_default_dynamics_parameters()
         self._compute_intermediate_values(dt=self.physics_dt)
+
+        self.diff_ik_controller = DifferentialIKController(cfg.diff_ik_cfg, num_envs=cfg.scene.num_envs, device=self.device)
 
 
     def _set_body_inertias(self):
@@ -361,6 +363,7 @@ class FactoryEnv(DirectRLEnv):
         self.actions = (
             self.cfg.ctrl.ema_factor * action.clone().to(self.device) + (1 - self.cfg.ctrl.ema_factor) * self.actions
         )
+        self.logging_values['raw_action'] = action.clone().to(self.device).cpu().numpy()
 
     def close_gripper_in_place(self):
         """Keep gripper in current position as gripper closes."""
@@ -412,6 +415,8 @@ class FactoryEnv(DirectRLEnv):
         # Interpret actions as target pos displacements and set pos target
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
 
+        self.logging_values["processed_action"] = pos_actions.clone().to(self.device).cpu().numpy()
+
         # Interpret actions as target rot (axis-angle) displacements
         rot_actions = self.actions[:, 3:6]
         if self.cfg_task.unidirectional_rot:
@@ -426,6 +431,10 @@ class FactoryEnv(DirectRLEnv):
         )
         self.ctrl_target_fingertip_midpoint_pos = self.fixed_pos_action_frame + pos_error_clipped
 
+        self.logging_values["target_fingertip_pos"] = self.ctrl_target_fingertip_midpoint_pos.clone().to(self.device).cpu().numpy()
+        self.logging_values["fixed_pos_obs_frame"] = self.fixed_pos_obs_frame.clone().to(self.device).cpu().numpy()
+        self.logging_values["fingertip_midpoint_pos"] = self.fingertip_midpoint_pos.clone().to(self.device).cpu().numpy()
+        
         # Convert to quat and set rot target
         angle = torch.norm(rot_actions, p=2, dim=-1)
         axis = rot_actions / angle.unsqueeze(-1)
@@ -474,12 +483,36 @@ class FactoryEnv(DirectRLEnv):
             device=self.device,
         )
 
+
+        ## self.fingertip_midpoint_pos frame 
+        ## self.ctrl_target_fingertip_midpoint_pos frame 
+        ## jacobian in the frame 
+        self.joint_torques_ik, self.target_joint_pose_ik = fc.compute_ik_diff_dof_torque(
+            curr_fingertip_midpoint_pos=self.fingertip_midpoint_pos,
+            curr_fingertip_midpoint_quat=self.fingertip_midpoint_quat,
+            target_midpoint_pos=self.ctrl_target_fingertip_midpoint_pos,
+            target_midpoint_quat=self.ctrl_target_fingertip_midpoint_quat,
+            curr_joint_pos=self.joint_pos,
+            jacobian=self.fingertip_midpoint_jacobian,
+            diff_ik_controller=self.diff_ik_controller,
+            cfg=self.cfg,
+            device=self.device
+        )
+
+ 
         # set target for gripper joints to use physx's PD controller
         self.ctrl_target_joint_pos[:, 7:9] = self.ctrl_target_gripper_dof_pos
         self.joint_torque[:, 7:9] = 0.0
+        self.joint_torques_ik[:, 7:9] = 0.0
 
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
-        self._robot.set_joint_effort_target(self.joint_torque)
+        # self._robot.set_joint_effort_target(self.joint_torque)
+        self._robot.set_joint_effort_target(self.joint_torques_ik)
+
+
+        self.logging_values["dof_torques"] = self.joint_torques_ik[:,:7].clone().to(self.device).cpu().numpy()
+        self.logging_values["current_joint_pos"] = self.joint_pos[:,:7].clone().to(self.device).cpu().numpy()
+        self.logging_values["target_joint_pos"] = self.target_joint_pose_ik[:,:7].clone().to(self.device).cpu().numpy()
 
     def _get_dones(self):
         """Update intermediate values used for rewards and observations."""

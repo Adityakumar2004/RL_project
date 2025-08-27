@@ -44,7 +44,7 @@ import imageio
 
 from utils_1 import TestingAgent, env_wrapper
 from agents_defn import Agent
-  
+from utils_1 import target_dof_torque_log, log_values
     
 def make_env(video_folder:str | None =None, output_type: str = "numpy"):
 
@@ -71,10 +71,11 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
 
 
 def main():
-
-    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "custom_rewards")
+    exp_name = "diff_ik"
+    file_path_csv = os.path.join("custom_scripts", "logs", "ppo_factory", "csv_files", f"{exp_name}.csv")
+    video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", exp_name)
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
-    checkpoint_path = os.path.join(checkpoint_folder, "custom_rewards.pt")
+    checkpoint_path = os.path.join(checkpoint_folder, f"{exp_name}.pt")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = make_env(video_folder, output_type="torch")
@@ -84,7 +85,8 @@ def main():
 
 
 
-    avg_reward = TestingAgent(env, device, args_cli.num_envs, agent, checkpoint_path = checkpoint_path, num_episodes=10, recording_enabled=True)
+
+    avg_reward = TestingAgent(env, device, args_cli.num_envs, agent, checkpoint_path = checkpoint_path, num_episodes=2, recording_enabled=True, sim_step_func=log_values, file_path = file_path_csv)
 
     print(f"Average reward over 4 episodes: {avg_reward:.2f}")
 

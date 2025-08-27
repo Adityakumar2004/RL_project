@@ -11,6 +11,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
+from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 
 from custom_scripts.factory.factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 
@@ -184,6 +185,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             ),
         },
     )
+    
+    diff_ik_cfg = DifferentialIKControllerCfg(command_type="pose", use_relative_mode=True, ik_method="dls")
     
 
 @configclass

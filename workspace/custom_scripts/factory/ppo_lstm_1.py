@@ -144,9 +144,10 @@ if __name__ == "__main__":
 
     ## start the env 
     # video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_1")
+    exp_name = "diff_ik"
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
     os.makedirs(checkpoint_folder, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_folder, "custom_rewards.pt")
+    checkpoint_path = os.path.join(checkpoint_folder, f"{exp_name}.pt")
     
     args = Args()
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
@@ -167,7 +168,7 @@ if __name__ == "__main__":
     if tracking_enabled:
         wandb.init(
             project = "Space_RL",
-            name = f"ppo_lstm_custom_rew_{int(time.time())}"
+            name = f"{exp_name}_{int(time.time())}"
             
         )  
 

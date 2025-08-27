@@ -118,3 +118,18 @@ RUN echo "export ISAACLAB_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \
 # make working directory as the Isaac Lab directory
 # this is the default directory when the container is run
 WORKDIR ${ISAACLAB_PATH}
+
+
+## download and install miniconda
+RUN curl -o /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/miniconda && \
+    rm /tmp/miniconda.sh
+
+## initalize conda
+RUN /opt/miniconda/bin/conda init bash
+
+## create a conda env analysis for matplot lib, pandas, jupyterlab
+RUN conda create -n jupyter_env python=3.10 -y && \
+    conda install -n jupyter_env jupyterlab matplotlib pandas -y && \
+    conda clean -afy 
+

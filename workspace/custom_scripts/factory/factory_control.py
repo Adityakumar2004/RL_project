@@ -14,6 +14,7 @@ import torch
 import isaacsim.core.utils.torch as torch_utils
 
 from isaaclab.utils.math import axis_angle_from_quat
+from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 
 
 def compute_dof_torque(
@@ -194,3 +195,39 @@ def _apply_task_space_gains(
         0.0 - fingertip_midpoint_angvel
     )
     return task_wrench
+
+
+def compute_ik_diff_dof_torque(
+        curr_fingertip_midpoint_pos, 
+        curr_fingertip_midpoint_quat, 
+        target_midpoint_pos, 
+        target_midpoint_quat, 
+        curr_joint_pos, 
+        jacobian, 
+        diff_ik_controller,
+        cfg, 
+        device):
+
+    num_envs = cfg.scene.num_envs
+    target_joint_pos = torch.zeros((num_envs, curr_joint_pos.shape[1]), device=device)
+    pos_error, axis_angle_error = get_pose_error(curr_fingertip_midpoint_pos, curr_fingertip_midpoint_quat, target_midpoint_pos, target_midpoint_quat, 'geometric', 'axis_angle')
+    
+    ee_pose_error = torch.cat((pos_error, axis_angle_error), dim=1)
+
+    
+    
+    diff_ik_controller.set_command(command=ee_pose_error, ee_pos=curr_fingertip_midpoint_pos, ee_quat=curr_fingertip_midpoint_quat)
+
+    target_joint_pos[:,:7] = diff_ik_controller.compute(curr_fingertip_midpoint_pos, curr_fingertip_midpoint_quat, jacobian, curr_joint_pos[:, :7].clone())
+
+    target_joint_pos[:, 7:] = curr_joint_pos[:, 7:]
+
+    dof_torque = apply_dof_gains(kp = 100, target_joint_pos=target_joint_pos, curr_joint_pos=curr_joint_pos, num_envs=num_envs, device=device)
+    # print("i am here")
+    return dof_torque, target_joint_pos
+
+
+def apply_dof_gains(kp, target_joint_pos, curr_joint_pos, num_envs, device):
+    torque = torch.zeros((num_envs, curr_joint_pos.shape[1]), device=device)
+    torque = kp * (target_joint_pos - curr_joint_pos)
+    return torque
