@@ -119,6 +119,10 @@ RUN echo "export ISAACLAB_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \
 # this is the default directory when the container is run
 WORKDIR ${ISAACLAB_PATH}
 
+## version errors
+# RUN pip install numpy==1.26.4
+RUN ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install numpy==1.26.4
+
 
 ## download and install miniconda
 RUN curl -o /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
@@ -126,7 +130,12 @@ RUN curl -o /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-lat
     rm /tmp/miniconda.sh
 
 ## initalize conda
-RUN /opt/miniconda/bin/conda init bash
+# RUN /opt/miniconda/bin/conda init bash
+ENV PATH=/opt/miniconda/bin:$PATH
+
+# Accept Terms of Service
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
 ## create a conda env analysis for matplot lib, pandas, jupyterlab
 RUN conda create -n jupyter_env python=3.10 -y && \
