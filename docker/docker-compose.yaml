@@ -35,6 +35,11 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
     # This overlay allows changes on the local files to
     # be reflected within the container immediately
     # ${PATH_WORKSPACE_HOST} = ../workspace
+
+  # - type: bind
+  #   source: ${PATH_WORKSPACE_HOST}
+  #   target: /workspace
+
   - type: bind
     source: ${PATH_WORKSPACE_HOST}/IsaacLab/source
     target: ${DOCKER_ISAACLAB_PATH}/source
@@ -135,7 +140,7 @@ services:
     entrypoint: bash
     stdin_open: true
     tty: true
-
+  
 volumes:
   # isaac-sim
   isaac-cache-kit:
