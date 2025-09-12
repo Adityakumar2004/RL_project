@@ -120,10 +120,10 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
     id_name = "peg_insert-v0-uw"
     gym.register(
         id=id_name,
-        entry_point="custom_scripts.factory.factory_env:FactoryEnv",
+        entry_point="custom_scripts.factory.factory_env_diff_ik:FactoryEnv",
         disable_env_checker=True,
         kwargs={
-            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg:FactoryTaskPegInsertCfg",
+            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg_diff_ik:FactoryTaskPegInsertCfg",
         },
     )
 
@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
     ## start the env 
     # video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "videos_lstm_1")
-    exp_name = "diff_ik"
+    exp_name = "diff_ik_2"
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
     os.makedirs(checkpoint_folder, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_folder, f"{exp_name}.pt")

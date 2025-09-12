@@ -154,29 +154,35 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             },
             pos=(0.0, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
-        ),#default_dof_pos_tensor = [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
+        ),
         actuators={
             "panda_arm1": ImplicitActuatorCfg(
                 joint_names_expr=["panda_joint[1-4]"],
-                stiffness=0.0,
-                damping=0.0,
-                friction=0.0,
-                armature=0.0,
-                effort_limit=87,
-                velocity_limit=124.6,
+                stiffness=800.0,
+                damping=160.0,
+                # friction=0.3,
+                # armature=0.0,
+                # effort_limit=87,
+                effort_limit=80,
+                # velocity_limit=124.6,
+                velocity_limit=2.0,
             ),
             "panda_arm2": ImplicitActuatorCfg(
                 joint_names_expr=["panda_joint[5-7]"],
-                stiffness=0.0,
-                damping=0.0,
-                friction=0.0,
-                armature=0.0,
-                effort_limit=12,
-                velocity_limit=149.5,
+                stiffness=800.0,
+                damping=160.0,
+                # friction=0.3,
+                # armature=0.0,
+                # effort_limit=12,
+                effort_limit=10,
+                # velocity_limit=149.5,
+                velocity_limit=2.5,
+                
             ),
             "panda_hand": ImplicitActuatorCfg(
                 joint_names_expr=["panda_finger_joint[1-2]"],
-                effort_limit=40.0,
+                # effort_limit=40.0,
+                effort_limit=200.0,
                 velocity_limit=0.04,
                 stiffness=7500.0,
                 damping=173.0,
@@ -193,7 +199,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 class FactoryTaskPegInsertCfg(FactoryEnvCfg):
     task_name = "peg_insert"
     task = PegInsert()
-    # episode_length_s = 10.0
     episode_length_s = 20.0
 
 

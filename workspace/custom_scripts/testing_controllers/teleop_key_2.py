@@ -43,10 +43,10 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
     id_name = "peg_insert-v0-uw"
     gym.register(
         id=id_name,
-        entry_point="custom_scripts.testing_controllers.factory_env_task_space:RobotEnv",
+        entry_point="custom_scripts.testing_controllers.factory_env_task_space:RobotEnvTaskSpace",
         disable_env_checker=True,
         kwargs={
-            "env_cfg_entry_point":"custom_scripts.testing_controllers.factory_env_task_space:RobotEnvCfg",
+            "env_cfg_entry_point":"custom_scripts.testing_controllers.factory_env_task_space:RobotEnvCfgTaskSpace",
         },
     )
 
@@ -125,7 +125,7 @@ class handling_log:
 class ControllerWindow:
     """A UI window for controlling robot parameters with sliders."""
     
-    def __init__(self, initial_kp=100.0, initial_kd=10.0, env:gym.Env=None):
+    def __init__(self, env:gym.Env=None):
         """
         Initialize the controller window.
         
@@ -208,7 +208,6 @@ class ControllerWindow:
             self.window.destroy()
             self.window = None
 
-
     def create_new_slider_widget(self, param_name, value, min_val=0, max_val=1000, callback_fn=None, **kwargs):
 
         if param_name in self.slider_params.keys():
@@ -257,6 +256,8 @@ def callback_kd(params, model, env:gym.Env, group_name):
     env_ids = torch.arange(env.unwrapped.scene.num_envs, device="cpu")
     env.unwrapped._robot.root_physx_view.set_dof_dampings(damping_tensor.cpu(), env_ids)
     params["value"] = model.as_float
+
+
 
 def create_marker_spheres(env, count, color=(1.0, 0.0, 0.0), radius = 0.001):
 
@@ -332,6 +333,35 @@ def visualize_markers(env, env_marker_visualizer:VisualizationMarkers, pose: Uni
 
 
 
+def callback_kp_lin_task_space(params, model, env:gym.Env):
+    new_kp_value = model.as_float
+    kp_value = env.task_prop_gains
+    kp_value[:, :3] = new_kp_value
+    env.unwrapped.set_task_gains(kp_value, rot_deriv_scale=1.0)
+    params["value"] = model.as_float
+
+def callback_kp_rot_task_space(params, model, env:gym.Env):
+    new_kp_value = model.as_float
+    kp_value = env.task_prop_gains
+    kp_value[:, 3:6] = new_kp_value
+    env.unwrapped.set_task_gains(kp_value, rot_deriv_scale=1.0)
+    params["value"] = model.as_float
+
+def callback_kd_lin_task_space(params, model, env:gym.Env):
+    new_kd_value = model.as_float
+    kd_value = env.task_deriv_gains
+    kd_value[:, :3] = new_kd_value
+    env.unwrapped.set_task_gains(env.task_prop_gains, deriv_gains=kd_value, rot_deriv_scale=1.0)
+    params["value"] = model.as_float
+
+def callback_kd_rot_task_space(params, model, env:gym.Env):
+    new_kd_value = model.as_float
+    kd_value = env.task_deriv_gains
+    kd_value[:, 3:6] = new_kd_value
+    env.unwrapped.set_task_gains(env.task_prop_gains, deriv_gains=kd_value, rot_deriv_scale=1.0)
+    params["value"] = model.as_float
+    
+
 def main():
     """Main function."""
 
@@ -344,46 +374,86 @@ def main():
     # obs = env._get_observations()
 
     # Create the controller window
-    controller = ControllerWindow(initial_kp=100.0, initial_kd=10.0)
+    controller = ControllerWindow()
     
-    controller.create_new_slider_widget(
-        param_name="kp_arm1", 
-        value=800.0, 
-        min_val=0.0, 
-        max_val=2000.0, 
-        callback_fn=callback_kp, 
-        env=env,
-        group_name = "panda_arm1"
-    )
+    ## ---------------- joint space gains
+
+    # controller.create_new_slider_widget(
+    #     param_name="kp_arm1", 
+    #     value=800.0, 
+    #     min_val=0.0, 
+    #     max_val=2000.0, 
+    #     callback_fn=callback_kp, 
+    #     env=env,
+    #     group_name = "panda_arm1"
+    # )
     
-    controller.create_new_slider_widget(
-        param_name="kd_arm1", 
-        value=160.0, 
-        min_val=0.0, 
-        max_val=2000.0, 
-        callback_fn=callback_kd, 
-        env=env,
-        group_name = "panda_arm1"
-    )
+    # controller.create_new_slider_widget(
+    #     param_name="kd_arm1", 
+    #     value=160.0, 
+    #     min_val=0.0, 
+    #     max_val=2000.0, 
+    #     callback_fn=callback_kd, 
+    #     env=env,
+    #     group_name = "panda_arm1"
+    # )
+
+    # controller.create_new_slider_widget(
+    #     param_name="kp_arm2", 
+    #     value=800.0, 
+    #     min_val=0.0, 
+    #     max_val=2000.0,
+    #     callback_fn=callback_kp,
+    #     env=env,
+    #     group_name="panda_arm2"
+    # )
+
+    # controller.create_new_slider_widget(
+    #     param_name="kd_arm2",
+    #     value=160,
+    #     min_val=0.0,
+    #     max_val=2000,
+    #     callback_fn=callback_kd,
+    #     env=env,
+    #     group_name="panda_arm2"
+    # )
+
+    ## --------------- task space gains
 
     controller.create_new_slider_widget(
-        param_name="kp_arm2", 
-        value=800.0, 
-        min_val=0.0, 
-        max_val=2000.0,
-        callback_fn=callback_kp,
-        env=env,
-        group_name="panda_arm2"
-    )
-
-    controller.create_new_slider_widget(
-        param_name="kd_arm2",
-        value=160,
+        param_name="kp_lin_task_space",
+        value=100.0,
         min_val=0.0,
-        max_val=2000,
-        callback_fn=callback_kd,
-        env=env,
-        group_name="panda_arm2"
+        max_val=2000.0,
+        callback_fn=callback_kp_lin_task_space,
+        env=env
+    )
+
+    controller.create_new_slider_widget(
+        param_name="kp_rot_task_space",
+        value=30.0,
+        min_val=0.0,
+        max_val=2000.0,
+        callback_fn=callback_kp_rot_task_space,
+        env=env
+    )
+
+    controller.create_new_slider_widget(
+        param_name="kd_lin_task_space",
+        value=20.0,
+        min_val=0.0,
+        max_val=2000.0,
+        callback_fn=callback_kd_lin_task_space,
+        env=env
+    )
+
+    controller.create_new_slider_widget(
+        param_name="kd_rot_task_space",
+        value=11.0,
+        min_val=0.0,
+        max_val=2000.0,
+        callback_fn=callback_kd_rot_task_space,
+        env=env
     )
 
     controller._create_window()
@@ -440,8 +510,8 @@ def main():
                 log_handler.save_log(log_path)
                 print("Recording state is 2 and saving")
 
-            kp_value = controller.get_params('kp_arm2')
-            kd_value = controller.get_params('kd_arm2')
+            # kp_value = controller.get_params('kp_arm2')
+            # kd_value = controller.get_params('kd_arm2')
             # print("kp and kd values are ", kp_value, kd_value)
             # print("kp_arm2 and kd_arm2 of robot \n", env.unwrapped._robot.actuators["panda_arm2"].stiffness, env.unwrapped._robot.actuators["panda_arm2"].damping)
             # print("robot data joint stiffness \n", env.unwrapped._robot.data.joint_stiffness)

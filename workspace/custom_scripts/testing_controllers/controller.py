@@ -50,8 +50,8 @@ def compute_dof_torque(
         jacobian_type="geometric",
         rot_error_type="axis_angle",
     )
-    print("pos error: \n", pos_error[0,:])
-    print("axis angle error: \n", axis_angle_error[0,:])
+    print("pos error \n", pos_error[0,:].cpu().numpy())
+    print("axis angle error \n", axis_angle_error[0,:].cpu().numpy())
     delta_fingertip_pose = torch.cat((pos_error, axis_angle_error), dim=1)
 
     # Set tau = k_p * task_pos_error - k_d * task_vel_error (building towards eq. 3.96-3.98)
@@ -87,12 +87,13 @@ def compute_dof_torque(
     u_null = cfg.ctrl.kd_null * -dof_vel[:, :7] + cfg.ctrl.kp_null * distance_to_default_dof_pos
     u_null = arm_mass_matrix @ u_null.unsqueeze(-1)
     torque_null = (torch.eye(7, device=device).unsqueeze(0) - torch.transpose(jacobian, 1, 2) @ j_eef_inv) @ u_null
-    dof_torque[:, 0:7] += torque_null.squeeze(-1)
+    # dof_torque[:, 0:7] += torque_null.squeeze(-1)
 
     # TODO: Verify it's okay to no longer do gripper control here.
     dof_torque = torch.clamp(dof_torque, min=-100.0, max=100.0)
-    print("task wrench: \n", task_wrench[0,:].cpu().numpy())
-    print("dof torque: \n", dof_torque[0,:].cpu().numpy())
+
+    print("dof_torque \n", dof_torque[0,:].cpu().numpy())
+    print("task_wrench  \n", task_wrench[0,:].cpu().numpy())
     return dof_torque, task_wrench
 
 
@@ -207,6 +208,7 @@ def _apply_task_space_gains(
     print("rot error \n",rot_error[0,:].cpu().numpy())
     print("fingertip_midpoint_linvel \n",fingertip_midpoint_linvel[0,:].cpu().numpy())
     print("fingertip_midpoint_angvel \n",fingertip_midpoint_angvel[0,:].cpu().numpy())
+
     return task_wrench
 
 

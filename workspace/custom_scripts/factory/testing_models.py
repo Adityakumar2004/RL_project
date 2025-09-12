@@ -51,10 +51,10 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
     id_name = "peg_insert-v0-uw"
     gym.register(
         id=id_name,
-        entry_point="custom_scripts.factory.factory_env:FactoryEnv",
+        entry_point="custom_scripts.factory.factory_env_diff_ik:FactoryEnv",
         disable_env_checker=True,
         kwargs={
-            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg:FactoryTaskPegInsertCfg",
+            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg_diff_ik:FactoryTaskPegInsertCfg",
         },
     )
 
@@ -71,7 +71,7 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
 
 
 def main():
-    exp_name = "diff_ik"
+    exp_name = "diff_ik_2"
     file_path_csv = os.path.join("custom_scripts", "logs", "ppo_factory", "csv_files", f"{exp_name}.csv")
     video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", exp_name)
     checkpoint_folder = os.path.join("custom_scripts", "logs", "ppo_factory", "checkpoints")
@@ -79,6 +79,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = make_env(video_folder, output_type="torch")
+    # env = make_env(output_type="torch")
     env.eval()
     agent = Agent(env, eval=True)
     agent.to(device)
@@ -86,7 +87,7 @@ def main():
 
 
 
-    avg_reward = TestingAgent(env, device, args_cli.num_envs, agent, checkpoint_path = checkpoint_path, num_episodes=2, recording_enabled=True, sim_step_func=log_values, file_path = file_path_csv)
+    avg_reward = TestingAgent(env, device, args_cli.num_envs, agent, checkpoint_path = checkpoint_path, num_episodes=2, recording_enabled=env.enable_recording, sim_step_func=log_values, file_path = file_path_csv)
 
     print(f"Average reward over 4 episodes: {avg_reward:.2f}")
 
@@ -96,3 +97,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
+

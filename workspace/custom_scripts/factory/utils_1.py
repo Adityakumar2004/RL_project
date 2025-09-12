@@ -128,7 +128,7 @@ class env_wrapper(gym.Wrapper):
 
         if self.output_type == "numpy":
             obs = {k: v.cpu().numpy() for k, v in obs.items()}
-            rewards = rewards.cpu().numpy()
+            rewards = rewards.cpu().numpy() if isinstance(rewards, torch.Tensor) else rewards
             terminations = terminations.cpu().numpy()
             truncations = truncations.cpu().numpy()
 
@@ -171,7 +171,10 @@ class env_wrapper(gym.Wrapper):
             self.set_camera_pose_fixed_asset(0, 0)
 
             ##--- cam2
-            env_id = np.random.randint(1, self.unwrapped.num_envs)
+            if self.unwrapped.num_envs > 1:
+                env_id = np.random.randint(1, self.unwrapped.num_envs)
+            else:
+                env_id = 0
             print(f"[INFO]: Randomly selected env_id for cam2: {env_id}")
             self.set_camera_pose_fixed_asset(1, env_id)
             
@@ -224,9 +227,12 @@ class env_wrapper(gym.Wrapper):
         reward = reward_function(rewards_task2, hole_center_coords, held_asset_coords, xy_threshold = (1.5*radius)**2, z_epsilon = 0.006, alpha = 100.0, beta = 100)
 
         if output_type == "numpy":
-            reward = reward.cpu().numpy()
+            if isinstance(reward, torch.Tensor):
+                print("i am here in the torch type reward")
+                reward = reward.cpu().numpy()
         elif output_type == "torch":
-            reward = torch.tensor(reward, device=self.env.device)
+            if isinstance(reward, np.ndarray):
+                reward = torch.tensor(reward, device=self.env.device)
 
         return reward
 
@@ -490,9 +496,13 @@ def log_values(env, step, file_path:str):
     fixed_pos_obs_frame = logging_values.get("fixed_pos_obs_frame", np.zeros((1, 3)))[0].tolist()
     fingertip_midpoint_pos = logging_values.get("fingertip_midpoint_pos", np.zeros((1, 3)))[0].tolist()
     current_joint_pos = logging_values.get("current_joint_pos", np.zeros((1, 7)))[0].tolist()
+    applied_dof_torque = logging_values.get("applied_dof_torque", np.zeros((1, 7)))[0].tolist()
     
     if "target_joint_pos" in logging_values:
         target_joint_pos = logging_values.get("target_joint_pos", np.zeros((1, 7)))[0].tolist()
+
+    if "applied_wrench" in logging_values:
+        applied_wrench = logging_values.get("applied_wrench", np.zeros((1, 6)))[0].tolist()
 
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     file_exists = os.path.isfile(file_path)
@@ -509,9 +519,14 @@ def log_values(env, step, file_path:str):
             header = header + [f"fixed_pos_obs_frame_{i}" for i in range(len(fixed_pos_obs_frame))]
             header = header + [f"fingertip_midpoint_pos_{i}" for i in range(len(fingertip_midpoint_pos))]
             header = header + [f"current_joint_pos_{i}" for i in range(len(current_joint_pos))]
+            header = header + [f"applied_dof_torque_{i}" for i in range(len(applied_dof_torque))]
+
 
             if "target_joint_pos" in logging_values:
                 header = header + [f"target_joint_pos_{i}" for i in range(len(target_joint_pos))]
+
+            if "applied_wrench" in logging_values:
+                header = header + [f"applied_wrench_{i}" for i in range(len(applied_wrench))]
 
             writer.writerow(header)
 
@@ -523,9 +538,11 @@ def log_values(env, step, file_path:str):
                         + fixed_pos_obs_frame
                         + fingertip_midpoint_pos
                         + current_joint_pos
+                        + applied_dof_torque
                         + (
                             target_joint_pos
                             if "target_joint_pos" in logging_values
                             else []
                           )
+                        + (applied_wrench if "applied_wrench" in logging_values else [])
                         )

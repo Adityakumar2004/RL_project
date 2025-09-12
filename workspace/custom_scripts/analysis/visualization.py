@@ -10,7 +10,7 @@ import time
 
 # === Load logs ===
 
-exp_name = "diff_ik"
+exp_name = "teleop_test_2"
 csv_file_path =f"custom_scripts/logs/ppo_factory/csv_files/{exp_name}.csv"
 video_path = f"custom_scripts/logs/ppo_factory/{exp_name}/cam0_video.mp4"
 
