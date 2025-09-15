@@ -282,16 +282,28 @@ class RobotEnvCfgTaskSpace(DirectRLEnvCfg):
             collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
+            # joint_pos={
+            #     "panda_joint1": 0.00,#0.00871,
+            #     "panda_joint2": 0.611, #-0.10368,
+            #     "panda_joint3":  0.010,#-0.00794,
+            #     "panda_joint4": -1.880,#-1.49139,
+            #     "panda_joint5": -0.009,#-0.00083,
+            #     "panda_joint6": 2.489,#1.38774,
+            #     "panda_joint7": 0.740,#0.0,
+            #     "panda_finger_joint2": 0.04,
+            # },
             joint_pos={
-                "panda_joint1": 0.00,#0.00871,
-                "panda_joint2": 0.611, #-0.10368,
-                "panda_joint3":  0.010,#-0.00794,
-                "panda_joint4": -1.880,#-1.49139,
-                "panda_joint5": -0.009,#-0.00083,
-                "panda_joint6": 2.489,#1.38774,
-                "panda_joint7": 0.740,#0.0,
+                "panda_joint1": 0.00871,
+                "panda_joint2": -0.10368,
+                "panda_joint3": -0.00794,
+                "panda_joint4": -1.49139,
+                "panda_joint5": -0.00083,
+                "panda_joint6": 1.38774,
+                "panda_joint7": 0.0,
+                "panda_finger_joint1":0.04,
                 "panda_finger_joint2": 0.04,
             },
+
             pos=(0.0, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),#default_dof_pos_tensor = [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
@@ -425,7 +437,7 @@ class RobotEnv(DirectRLEnv):
         self.scene.write_data_to_sim()
         self.sim.step(render=False)
         self.scene.update(dt=self.physics_dt)
-        self._compute_intermediate_values()
+        self._compute_intermediate_values(self.physics_dt)
 
     def gripper_action(self):
         # print(self.actions)
@@ -470,7 +482,7 @@ class RobotEnv(DirectRLEnv):
         fingertip_midpoint_pos_b, fingertip_midpoint_quat_b  = self._compute_frame_pose()
         self.diff_ik_controller.set_command(delta_pos, fingertip_midpoint_pos_b, fingertip_midpoint_quat_b)
         
-        self._compute_intermediate_values()
+        self._compute_intermediate_values(self.physics_dt)
         # print('curr joint pos \n', self._robot.data.joint_pos[0,:7])
         # print('target joint pos \n', self._robot.data.joint_pos_target.clone().cpu().numpy()[0,:])
 
@@ -479,7 +491,7 @@ class RobotEnv(DirectRLEnv):
         # self.target_joint_pose = self._robot.data.joint_pos.clone()
         # self._robot.set_joint_position_target(self.target_joint_pose[:, 7:], self.gripper_joint_ids)
         # self.gripper_action()
-        self._compute_intermediate_values()
+        self._compute_intermediate_values(self.physics_dt)
         ee_pos_b, ee_quat_b = self._compute_frame_pose()
         joint_pos = self._robot.data.joint_pos[:,0:7]
         jacobian_b = self._compute_frame_jacobian()
@@ -487,10 +499,12 @@ class RobotEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self.target_joint_pose[:, 0:7], list(range(7)))
         pass
 
-    def _compute_intermediate_values(self):
+    def _compute_intermediate_values(self, dt):
 
         self.fingertip_midpoint_pos = self._robot.data.body_pos_w[:, self.fingertip_midpoint_idx]
         self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.fingertip_midpoint_idx]
+        self.fingertip_midpoint_linvel = self._robot.data.body_lin_vel_w[:, self.fingertip_midpoint_idx]
+        self.fingertip_midpoint_angvel = self._robot.data.body_ang_vel_w[:, self.fingertip_midpoint_idx]
 
 
         pass
@@ -510,8 +524,16 @@ class RobotEnv(DirectRLEnv):
         # print('default joint pos \n', joint_pos.cpu().numpy())
         self._robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        self._compute_intermediate_values(self.physics_dt)
+        print("ef position reset\n",self.fingertip_midpoint_pos[0])
+        print("ef velocity reset \n",self.fingertip_midpoint_linvel[0])
+
         self.step_sim_no_action()
-        # self._compute_intermediate_values()
+
+        self._compute_intermediate_values(self.physics_dt)
+        print("ef position after no action step \n",self.fingertip_midpoint_pos[0])
+        print("ef velocity after no action step \n",self.fingertip_midpoint_linvel[0])
+        
         self._hold_asset_in_gripper(env_ids)
         gripper_command = self.close_gripper * self.gripper_multiplier ## (num_envs, 1) * (1, 2) --> (num_envs, 2)
         # print("gripper command  shape2", gripper_command.shape)
@@ -605,11 +627,11 @@ for i in range(decimation):
 '''
 class RobotEnvTaskSpace(DirectRLEnv):
 
-    def __init__(self, cfg:RobotEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg:RobotEnvCfgTaskSpace, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.rl_dt = self.cfg.sim.dt * self.cfg.decimation
-
+        self.robot_friction = cfg.robot_friction
 
         # print(self._robot.joint_names)
         # print(self._robot.body_names)
@@ -643,8 +665,19 @@ class RobotEnvTaskSpace(DirectRLEnv):
         ## task gains
         self.default_task_prop_gains = torch.tensor([100, 100, 100, 30, 30, 30], device=self.device).repeat(self.num_envs, 1)
         # self.default_task_deriv_ga
+        ## body intertias 
+        self._set_body_inertias()
         ## friction
-        self._set_friction(self._robot, self.cfg.robot_friction)
+        self._set_friction(self._robot, self.robot_friction)
+        pass
+
+    def _set_body_inertias(self):
+        # """Note: this is to account for the asset_options.armature parameter in IGE."""
+        inertias = self._robot.root_physx_view.get_inertias()
+        offset = torch.zeros_like(inertias)
+        offset[:, :, [0, 4, 8]] += 0.01
+        new_inertias = inertias + offset
+        self._robot.root_physx_view.set_inertias(new_inertias, torch.arange(self.num_envs))
         pass
 
     def _set_friction(self, asset, value):
@@ -669,8 +702,11 @@ class RobotEnvTaskSpace(DirectRLEnv):
         self.ee_angvel_fd = torch.zeros((self.num_envs, 3), device=self.device)
 
         self.ctrl_target_fingertip_midpoint_pos = torch.zeros((self.num_envs, 3), device=self.device)
-        self.ctrl_target_fingertip_midpoint_quat = torch.zeros((self.num_envs, 4), device=self.device)
+        self.ctrl_target_fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
 
+
+        self.default_ef_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.default_ef_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
 
     def step_sim_no_action(self):
         """Step the simulation without an action. Used for resets."""
@@ -710,21 +746,23 @@ class RobotEnvTaskSpace(DirectRLEnv):
 
         self.scene.clone_environments(copy_from_source=False) ## if set to true we can have independent usd prims => independet robot cfgs, other assets
 
+    ##TODO changes made here uncomment them
     def _pre_physics_step(self, actions):
         self.actions = actions
         self.log_values["raw_action"] = actions.clone().cpu()
 
-        self.target_joint_pose = self._robot.data.joint_pos.clone()
-        self.gripper_action()
-        self._robot.set_joint_position_target(self.target_joint_pose[:, 7:], self.gripper_joint_ids)
+        # self.target_joint_pose = self._robot.data.joint_pos.clone()
+        # self.gripper_action()
+        # self._robot.set_joint_position_target(self.target_joint_pose[:, 7:], self.gripper_joint_ids)
         
-        delta_pos  = actions[:, :6]
-        fingertip_midpoint_pos_b, fingertip_midpoint_quat_b  = self._compute_frame_pose()
-        self.diff_ik_controller.set_command(delta_pos, fingertip_midpoint_pos_b, fingertip_midpoint_quat_b)
+        # delta_pos  = actions[:, :6]
+        # fingertip_midpoint_pos_b, fingertip_midpoint_quat_b  = self._compute_frame_pose()
+        # self.diff_ik_controller.set_command(delta_pos, fingertip_midpoint_pos_b, fingertip_midpoint_quat_b)
         
         self._compute_intermediate_values(self.physics_dt)
         # print('curr joint pos \n', self._robot.data.joint_pos[0,:7])
         # print('target joint pos \n', self._robot.data.joint_pos_target.clone().cpu().numpy()[0,:])
+        print("step over")
 
     def _apply_action(self):
         # print(self._robot.data.joint_pos.clone().cpu().numpy()[0,7:])
@@ -735,14 +773,19 @@ class RobotEnvTaskSpace(DirectRLEnv):
 
         
         self._compute_intermediate_values(self.physics_dt)
-        ee_pos_b, ee_quat_b = self._compute_frame_pose()
-        joint_pos = self._robot.data.joint_pos[:,0:7]
-        jacobian_b = self._compute_frame_jacobian()
-        self.target_joint_pose[:, 0:7] = self.diff_ik_controller.compute(ee_pos_b, ee_quat_b, jacobian_b, joint_pos)
-        self._robot.set_joint_position_target(self.target_joint_pose[:, 0:7], list(range(7)))
+        ## TODO changes made here uncomment them 
+        # ee_pos_b, ee_quat_b = self._compute_frame_pose()
+        # joint_pos = self._robot.data.joint_pos[:,0:7]
+        # jacobian_b = self._compute_frame_jacobian()
+        # self.target_joint_pose[:, 0:7] = self.diff_ik_controller.compute(ee_pos_b, ee_quat_b, jacobian_b, joint_pos)
+        # self._robot.set_joint_position_target(self.target_joint_pose[:, 0:7], list(range(7)))
+        print("fingertip pos \n", self.fingertip_midpoint_pos[0])
+        # print("fingertip quat \n", self.fingertip_midpoint_quat[0])
+        print("fingertip lin vel \n", self.fingertip_midpoint_linvel[0])
         
-        self._task_space_control()
-        self.generate_ctrl_signals()
+        ## TODO changes made here to check what happens if i just spawn and take no control action
+        # self._task_space_control()
+        # self.generate_ctrl_signals()
         pass
 
     def _compute_intermediate_values(self, dt):
@@ -829,18 +872,31 @@ class RobotEnvTaskSpace(DirectRLEnv):
     def _reset_idx(self, env_ids: torch.Tensor):
         super()._reset_idx(env_ids)
         joint_pos = self._robot.data.default_joint_pos[env_ids].clone()
-        joint_vel = self._robot.data.default_joint_vel[env_ids].clone()
+        # joint_vel = self._robot.data.default_joint_vel[env_ids].clone()
+        joint_vel = torch.zeros_like(joint_pos)
         # print('default joint pos \n', joint_pos.cpu().numpy())
         self._robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        # self._robot.reset()
+        self._compute_intermediate_values(self.physics_dt)
+        print("ef position reset\n",self.fingertip_midpoint_pos[0])
+        print("ef velocity reset \n",self.fingertip_midpoint_linvel[0])
+        # print("")
+
         self.step_sim_no_action()
         self._compute_intermediate_values(self.physics_dt)
-        self._hold_asset_in_gripper(env_ids)
-        gripper_command = self.close_gripper * self.gripper_multiplier ## (num_envs, 1) * (1, 2) --> (num_envs, 2)
+        self.default_ef_pos = self.fingertip_midpoint_pos.clone()
+        self.default_ef_quat = self.fingertip_midpoint_quat.clone()
+        print("ef position after no action step \n",self.fingertip_midpoint_pos[0])
+        print("ef velocity after no action step \n",self.fingertip_midpoint_linvel[0])
+        ## TODO changes made here uncomment them
+        # self._hold_asset_in_gripper(env_ids)
+        # gripper_command = self.close_gripper * self.gripper_multiplier ## (num_envs, 1) * (1, 2) --> (num_envs, 2)
+        # gripper_command = self.close_gripper * self.gripper_multiplier ## (num_envs, 1) * (1, 2) --> (num_envs, 2)
         # print("gripper command  shape2", gripper_command.shape)
 
-        joint_pos[:, self.gripper_joint_ids] = gripper_command
-        self._robot.set_joint_position_target(joint_pos, env_ids=env_ids)
+        # joint_pos[:, self.gripper_joint_ids] = gripper_command
+        # self._robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         
         # print('joint pos after writing \n', self._robot.data.joint_pos.clone().cpu().numpy()) 
         self.step_sim_no_action()
@@ -856,7 +912,8 @@ class RobotEnvTaskSpace(DirectRLEnv):
         self.ctrl_target_fingertip_midpoint_pos[env_ids] = self.fingertip_midpoint_pos[env_ids].clone()
         self.ctrl_target_fingertip_midpoint_quat[env_ids] = self.fingertip_midpoint_quat[env_ids].clone()
         
-        self.generate_ctrl_signals()
+        ## TODO changes made here to check what happens if i just spawn and take no control action
+        # self.generate_ctrl_signals()
         pass
     
     def _get_dones(self):
@@ -934,9 +991,10 @@ class RobotEnvTaskSpace(DirectRLEnv):
         # print("pos action \n", pos_actions[0,:].cpu().numpy())
         # print("rot action quat \n", rot_actions_quat[0,:].cpu().numpy())
 
-        self.ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions
+        ## TODO changes made here fixed the target pose to be initial pose 
+        self.ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions # self.default_ef_pos 
 
-        self.ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.fingertip_midpoint_quat)
+        self.ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.fingertip_midpoint_quat) #self.default_ef_quat 
 
         # target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(self.ctrl_target_fingertip_midpoint_quat), dim=1)
         # target_euler_xyz[:, 0] = 3.14159  # Restrict actions to be upright.

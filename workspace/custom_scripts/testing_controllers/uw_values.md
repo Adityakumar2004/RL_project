@@ -1,5 +1,24 @@
+#### diff ik 
 
+ef position reset
+ tensor([1.6346, 0.0061, 0.0697], device='cuda:0')
+ef velocity reset 
+ tensor([0., 0., 0.], device='cuda:0')
+ef position after no action step 
+ tensor([ 1.6353, -0.0045,  0.0705], device='cuda:0')
+ef velocity after no action step 
+ tensor([ 0.0813, -0.7902,  0.0398], device='cuda:0')
 
+#### task space controller env 
+
+ef position reset
+ tensor([1.6346, 0.0061, 0.0697], device='cuda:0')
+ef velocity reset 
+ tensor([0., 0., 0.], device='cuda:0')
+ef position after no action step 
+ tensor([ 1.6345, -0.0025,  0.0702], device='cuda:0')
+ef velocity after no action step 
+ tensor([-0.0075, -0.6341,  0.0195], device='cuda:0')
 
 #### controller env 
 

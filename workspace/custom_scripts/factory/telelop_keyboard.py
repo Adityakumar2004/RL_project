@@ -2,7 +2,7 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=" keyboard teleop")
-parser.add_argument("--num_envs", type=int, default=8, help="Number of environments to spawn.")
+parser.add_argument("--num_envs", type=int, default=2, help="Number of environments to spawn.")
 
 # parser.add_argument("--video", action="store_true", help="Enable video recording during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (in steps).")
@@ -26,7 +26,8 @@ import gymnasium as gym
 from isaaclab_tasks.utils import parse_env_cfg
 from utils_1 import env_wrapper, log_values
 import os
-from isaaclab.devices import Se3Keyboard
+# from isaaclab.devices import Se3Keyboard
+from custom_keyboard import keyboard_custom
 dt = 0.1
 
 
@@ -35,10 +36,10 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
     id_name = "peg_insert-v0-uw"
     gym.register(
         id=id_name,
-        entry_point="custom_scripts.factory.factory_env:FactoryEnv",
+        entry_point="custom_scripts.factory.factory_env_fate:FactoryEnv",
         disable_env_checker=True,
         kwargs={
-            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg:FactoryTaskPegInsertCfg",
+            "env_cfg_entry_point":"custom_scripts.factory.factory_env_cfg_fate:FactoryTaskPegInsertCfg",
         },
     )
 
@@ -49,7 +50,7 @@ def make_env(video_folder:str | None =None, output_type: str = "numpy"):
 
     env = gym.make(id_name, cfg = env_cfg, render_mode="rgb_array")
      
-    env = env_wrapper(env, video_folder, output_type=output_type, enable_normalization_rewards=False)
+    # env = env_wrapper(env, video_folder, output_type=output_type, enable_normalization_rewards=False)
     
     return env
 
@@ -72,24 +73,33 @@ def main():
 
     video_folder = os.path.join("custom_scripts", "logs", "ppo_factory", exp_name)
     env = make_env(video_folder=video_folder, output_type="numpy")
-    recording_enabled = env.enable_recording
+    # recording_enabled = env.enable_recording
 
 
     env.reset()
     # obs = env._get_observations()
 
-    keyboard = Se3Keyboard(pos_sensitivity=1.0*args_cli.sensitivity, rot_sensitivity=1.0*args_cli.sensitivity)
+    keyboard = keyboard_custom(pos_sensitivity=1.0*args_cli.sensitivity, rot_sensitivity=1.0*args_cli.sensitivity)
     keyboard.reset()
     print(f"\n\n{keyboard}\n\n")
     
     # simulate physics
     count = 0  
-    log_values(env, step=count, file_path=csv_file_path)
+    # log_values(env, step=count, file_path=csv_file_path)
     while simulation_app.is_running():
         with torch.inference_mode():
 
+            keyboard_output = keyboard.advance()
+            pose_action = keyboard_output["pose_command"]
+            close_gripper = keyboard_output["gripper_command"]
+            recording_state = keyboard_output["recording_state"]
+
+            if keyboard_output["reset_state"]:
+                print("\n i am in the reset state \n ", "---"*10, "\n")
+                env.reset()
+
             # Get keyboard input
-            pose_action, close_gripper = keyboard.advance()
+            # pose_action, close_gripper = keyboard.advance()
             # if close_gripper:
             #     action = np.concatenate((pose_action, np.array([-1.0])), axis=0)
             # else:
@@ -105,11 +115,11 @@ def main():
             
             # update counter
             count += 1
-            log_values(env, step=count, file_path=csv_file_path)
+            # log_values(env, step=count, file_path=csv_file_path)
             # time.sleep(dt)
 
-            if recording_enabled:
-                env.record_cameras()
+            # if recording_enabled:
+            #     env.record_cameras()
     
     # close the environment
     env.close()
