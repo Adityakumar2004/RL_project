@@ -145,6 +145,55 @@ class ContainerInterface:
             env=self.environ,
         )
 
+    def start_no_cache(self):
+
+        """Build and start the Docker container with no cache using the Docker compose command."""
+        print(
+            f"[INFO] Building the docker image and starting the container '{self.container_name}' in the"
+            " background...\n"
+        )
+
+        # build the image for the base profile if not running base (up will build base already if profile is base)
+        if self.profile != "base":
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "--file",
+                    "docker-compose.yaml",
+                    "--env-file",
+                    ".env.base",
+                    "build",
+                    "isaac-lab-base",
+                ],
+                check=False,
+                cwd=self.context_dir,
+                env=self.environ,
+            )
+
+        # build the image for the profile
+        subprocess.run(
+            ["docker", "compose"]
+            + self.add_yamls
+            + self.add_profiles
+            + self.add_env_files
+            + ["build", "--no-cache"],
+            check=True,
+            cwd=self.context_dir,
+            env=self.environ,
+        )
+
+        subprocess.run(
+            ["docker", "compose"]
+            + self.add_yamls
+            + self.add_profiles
+            + self.add_env_files
+            + ["up", "--detach", "--remove-orphans"],
+            check=False,
+            cwd=self.context_dir,
+            env=self.environ,
+        )      
+
     def enter(self):
         """Enter the running container by executing a bash shell.
 

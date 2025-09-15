@@ -56,12 +56,14 @@ RUN --mount=type=cache,target=/var/cache/apt \
     rm -rf /var/lib/apt/lists/*
 
 
-    
+# # copy the entire workspace to the container except few file and folders of isaaclab defined in .dockerignore
+# COPY ${PATH_WORKSPACE_HOST} /workspace
+
 # Copy the Isaac Lab directory (files to exclude are defined in .dockerignore)
 COPY ${PATH_WORKSPACE_HOST}/IsaacLab ${ISAACLAB_PATH}
 
 # copy the custom_srcipts folder to the container
-COPY ${PATH_WORKSPACE_HOST}/custom_scripts ${ISAACLAB_PATH}/../custom_scripts
+# COPY ${PATH_WORKSPACE_HOST}/custom_scripts ${ISAACLAB_PATH}/../custom_scripts
 
 
 

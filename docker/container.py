@@ -65,6 +65,9 @@ def parse_cli_args() -> argparse.Namespace:
         help="Build the docker image and create the container in detached mode.",
         parents=[parent_parser],
     )
+    
+    subparsers.add_parser("start_no_cache", help="Build the docker image without using cache.", parents=[parent_parser])
+    
     subparsers.add_parser(
         "enter", help="Begin a new bash process within an existing Isaac Lab container.", parents=[parent_parser]
     )
@@ -119,6 +122,19 @@ def main(args: argparse.Namespace):
             ci.environ.update(x11_envar)
         # start the container
         ci.start()
+    
+    elif args.command == "start_no_cache":
+        # check if x11 forwarding is enabled
+        x11_outputs = x11_utils.x11_check(ci.statefile)
+        # if x11 forwarding is enabled, add the x11 yaml and environment variables
+        if x11_outputs is not None:
+            (x11_yaml, x11_envar) = x11_outputs
+            ci.add_yamls += x11_yaml
+            ci.environ.update(x11_envar)
+        # start the container
+        ci.start_no_cache()
+        
+
     elif args.command == "enter":
         # refresh the x11 forwarding
         x11_utils.x11_refresh(ci.statefile)

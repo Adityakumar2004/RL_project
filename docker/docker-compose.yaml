@@ -57,6 +57,9 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
     source: ${PATH_WORKSPACE_HOST}/custom_scripts
     target: ${DOCKER_ISAACLAB_PATH}/../custom_scripts
 
+  - type: bind
+    source: ${PATH_WORKSPACE_HOST}/.vscode
+    target: ${DOCKER_ISAACLAB_PATH}/../.vscode
 
     
     # The effect of these volumes is twofold:
